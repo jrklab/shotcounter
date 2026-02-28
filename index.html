@@ -191,11 +191,16 @@
 
   <!-- Unsupported browser overlay -->
   <div id="unsupported">
-    <h2>Web Bluetooth not supported</h2>
+    <h2>Web Bluetooth not available</h2>
     <p>
-      Please use <strong>Chrome</strong> or <strong>Edge</strong> on
-      Android, Windows, or Linux.<br><br>
-      iOS Safari does not support Web Bluetooth.
+      <strong>On Linux / Chrome:</strong> Web Bluetooth is disabled by default.<br>
+      Go to <code style="background:#1e2736;padding:2px 6px;border-radius:4px;">chrome://flags/#enable-experimental-web-platform-features</code>,
+      set it to <em>Enabled</em>, then relaunch Chrome.
+    </p>
+    <p style="margin-top:12px;">
+      <strong>On Android:</strong> use Chrome or Edge — works out of the box.<br>
+      <strong>iOS Safari:</strong> not supported (Apple restriction).<br>
+      <strong>Firefox:</strong> not supported.
     </p>
   </div>
 
