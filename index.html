@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>🏀 Basketball Score</title>
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d1117;
+      --score:     #f0e040;
+      --total:     #888888;
+      --make:      #2ecc71;
+      --miss:      #e74c3c;
+      --idle:      #444455;
+      --orange:    #f39c12;
+      --btn-red:   #c0392b;
+      --btn-blue:  #2980b9;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: #ccc;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0;
+      touch-action: manipulation;
+    }
+
+    /* ── Header ───────────────────────────────────────────────────────────── */
+    header {
+      width: 100%;
+      padding: 10px 16px 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #1e2736;
+    }
+
+    header h1 { font-size: 1.1rem; font-weight: 600; color: #aab; }
+
+    #connect-btn {
+      padding: 7px 18px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: bold;
+      cursor: pointer;
+      background: var(--btn-blue);
+      color: #fff;
+      transition: background 0.2s;
+    }
+    #connect-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #connect-btn.disconnect { background: #555; }
+
+    /* ── Main scoreboard ─────────────────────────────────────────────────── */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      padding: 10px;
+    }
+
+    #score-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    #makes-label {
+      font-size: clamp(80px, 22vw, 140px);
+      font-weight: 900;
+      color: var(--score);
+      line-height: 1;
+    }
+
+    #sep {
+      font-size: clamp(40px, 10vw, 70px);
+      color: var(--total);
+      line-height: 1;
+    }
+
+    #total-label {
+      font-size: clamp(40px, 10vw, 70px);
+      color: var(--total);
+      line-height: 1;
+    }
+
+    #pct-label {
+      font-size: clamp(22px, 6vw, 36px);
+      color: var(--total);
+    }
+
+    #event-label {
+      font-size: clamp(16px, 4.5vw, 24px);
+      font-style: italic;
+      color: var(--idle);
+      min-height: 2em;
+      text-align: center;
+      padding: 0 12px;
+      transition: color 0.2s;
+    }
+
+    /* ── Calibration progress bar ─────────────────────────────────────────── */
+    #cal-bar-wrap {
+      width: min(90%, 360px);
+      height: 6px;
+      background: #1e2736;
+      border-radius: 3px;
+      overflow: hidden;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #cal-bar-wrap.visible { opacity: 1; }
+
+    #cal-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--orange);
+      border-radius: 3px;
+      transition: width 0.4s, background 0.4s;
+    }
+    #cal-bar.done { background: var(--make); width: 100%; }
+
+    /* ── Buttons ──────────────────────────────────────────────────────────── */
+    #clear-btn {
+      margin-top: 10px;
+      padding: 12px 32px;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: bold;
+      cursor: pointer;
+      background: var(--btn-red);
+      color: #fff;
+      touch-action: manipulation;
+    }
+    #clear-btn:active { filter: brightness(0.85); }
+
+    /* ── Footer status bar ────────────────────────────────────────────────── */
+    footer {
+      width: 100%;
+      padding: 6px 14px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid #1e2736;
+      font-size: 0.78rem;
+      color: #555566;
+    }
+
+    #ble-status { color: #555566; }
+    #pkt-rate   { color: #555566; }
+
+    /* ── Unsupported overlay ─────────────────────────────────────────────── */
+    #unsupported {
+      display: none;
+      position: fixed; inset: 0;
+      background: #0d1117ee;
+      align-items: center; justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      text-align: center;
+      padding: 24px;
+      z-index: 99;
+    }
+    #unsupported.show { display: flex; }
+    #unsupported h2   { color: var(--miss); font-size: 1.3rem; }
+    #unsupported p    { color: #aab; max-width: 340px; line-height: 1.5; }
+
+    /* ── MAKE/MISS flash animation ────────────────────────────────────────── */
+    @keyframes pop {
+      0%   { transform: scale(1); }
+      40%  { transform: scale(1.12); }
+      100% { transform: scale(1); }
+    }
+    .pop { animation: pop 0.35s ease-out; }
+  </style>
+</head>
+<body>
+
+  <!-- Unsupported browser overlay -->
+  <div id="unsupported">
+    <h2>Web Bluetooth not supported</h2>
+    <p>
+      Please use <strong>Chrome</strong> or <strong>Edge</strong> on
+      Android, Windows, or Linux.<br><br>
+      iOS Safari does not support Web Bluetooth.
+    </p>
+  </div>
+
+  <header>
+    <h1>🏀 Basketball Score</h1>
+    <button id="connect-btn">Connect</button>
+  </header>
+
+  <main>
+    <div id="score-row">
+      <span id="makes-label">0</span>
+      <span id="sep"> / </span>
+      <span id="total-label">0</span>
+    </div>
+
+    <div id="pct-label">— %</div>
+
+    <div id="event-label">tap Connect to start</div>
+
+    <div id="cal-bar-wrap">
+      <div id="cal-bar"></div>
+    </div>
+
+    <button id="clear-btn">Clear Score</button>
+  </main>
+
+  <footer>
+    <span id="ble-status">BLE: disconnected</span>
+    <span id="pkt-rate"></span>
+  </footer>
+
+  <script type="module">
+    import { BLEReceiver } from './ble.js';
+    import { PacketParser } from './parser.js';
+    import { ShotClassifier } from './classifier.js';
+
+    // ── Browser capability check ─────────────────────────────────────────
+    if (!navigator.bluetooth) {
+      document.getElementById('unsupported').classList.add('show');
+    }
+
+    // ── DOM refs ─────────────────────────────────────────────────────────
+    const makesLabel   = document.getElementById('makes-label');
+    const totalLabel   = document.getElementById('total-label');
+    const pctLabel     = document.getElementById('pct-label');
+    const eventLabel   = document.getElementById('event-label');
+    const connectBtn   = document.getElementById('connect-btn');
+    const clearBtn     = document.getElementById('clear-btn');
+    const bleStatus    = document.getElementById('ble-status');
+    const pktRateLbl   = document.getElementById('pkt-rate');
+    const calBarWrap   = document.getElementById('cal-bar-wrap');
+    const calBar       = document.getElementById('cal-bar');
+
+    // ── App state ─────────────────────────────────────────────────────────
+    let makes = 0, total = 0;
+    let pktCount = 0;
+    let flashTimer = null;
+    const FLASH_MS = 1500;
+
+    const parser     = new PacketParser();
+    const classifier = new ShotClassifier();
+
+    // ── BLE receiver ─────────────────────────────────────────────────────
+    const ble = new BLEReceiver(onPacket, onBleStatus);
+
+    function onBleStatus(state, detail) {
+      console.log(`BLE [${state}]`, detail ?? '');
+      switch (state) {
+        case 'scanning':
+        case 'connecting':
+          bleStatus.textContent = `BLE: ${detail}`;
+          bleStatus.style.color = '#f39c12';
+          setEvent('connecting…', '#f39c12');
+          break;
+        case 'connected':
+          bleStatus.textContent = 'BLE: connected';
+          bleStatus.style.color = '#2ecc71';
+          connectBtn.textContent = 'Disconnect';
+          connectBtn.classList.add('disconnect');
+          setEvent('calibrating baseline…  0%', '#f39c12');
+          showCalBar(true);
+          break;
+        case 'disconnected':
+          bleStatus.textContent = 'BLE: disconnected';
+          bleStatus.style.color = '#e74c3c';
+          connectBtn.textContent = 'Connect';
+          connectBtn.classList.remove('disconnect');
+          connectBtn.disabled = false;
+          if (total === 0) setEvent('tap Connect to start', getComputedStyle(document.documentElement).getPropertyValue('--idle'));
+          showCalBar(false);
+          break;
+        case 'error':
+          bleStatus.textContent = `BLE error: ${detail}`;
+          bleStatus.style.color = '#e74c3c';
+          connectBtn.disabled = false;
+          break;
+        case 'cancelled':
+          connectBtn.disabled = false;
+          break;
+      }
+    }
+
+    // ── Packet handler ────────────────────────────────────────────────────
+    function onPacket(dataView) {
+      pktCount++;
+      const { batch, lostPackets } = parser.parse(dataView);
+      if (lostPackets > 0) console.warn(`Packet loss: ${lostPackets}`);
+      if (!batch) return;
+
+      const cal         = classifier.calibrator;
+      const wasComplete = cal.isComplete;
+
+      const newShots = classifier.processBatch(batch);
+
+      // Calibration progress
+      if (!wasComplete) {
+        if (cal.isComplete) {
+          onCalibrationDone();
+        } else {
+          onCalibrationProgress(cal.progress);
+        }
+      }
+
+      // Shots
+      for (const shot of newShots) {
+        onShot(shot);
+      }
+    }
+
+    // ── Calibration UI ────────────────────────────────────────────────────
+    function showCalBar(visible) {
+      calBarWrap.classList.toggle('visible', visible);
+      if (!visible) {
+        calBar.classList.remove('done');
+        calBar.style.width = '0%';
+      }
+    }
+
+    function onCalibrationProgress(progress) {
+      const pct = Math.round(progress * 100);
+      calBar.style.width = `${pct}%`;
+      setEvent(`calibrating baseline…  ${pct}%`, '#f39c12');
+    }
+
+    function onCalibrationDone() {
+      calBar.classList.add('done');
+      setEvent('baseline ready — detecting shots', '#2ecc71');
+      setTimeout(() => showCalBar(false), 800);
+    }
+
+    // ── Shot handler ──────────────────────────────────────────────────────
+    function onShot(shot) {
+      const isMake = shot.classification === 'MAKE';
+      const type   = shot.basket_type ?? '';
+
+      if (isMake) makes++;
+      total++;
+      refreshScore();
+
+      const scoreText = `${makes} out of ${total}`;
+      if (isMake) {
+        const banner = type ? `MAKE!  ${type}` : 'MAKE!';
+        setEvent(banner, '#2ecc71');
+        speak(type === 'SWISH' ? `Swish. ${scoreText}` : `Made. ${scoreText}`);
+        triggerPop(makesLabel);
+      } else {
+        setEvent('Miss', '#e74c3c');
+        speak(`Miss. ${scoreText}`);
+      }
+
+      if (flashTimer) clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => {
+        eventLabel.style.color = '#444455';
+      }, FLASH_MS);
+
+      console.log(`${shot.classification} (${type}) | ${makes}/${total}`);
+    }
+
+    // ── Score helpers ─────────────────────────────────────────────────────
+    function refreshScore() {
+      makesLabel.textContent = makes;
+      totalLabel.textContent = total;
+      pctLabel.textContent   = total ? `${Math.round(makes / total * 100)} %` : '— %';
+    }
+
+    function setEvent(text, color) {
+      eventLabel.textContent  = text;
+      eventLabel.style.color  = color;
+    }
+
+    function triggerPop(el) {
+      el.classList.remove('pop');
+      void el.offsetWidth;    // force reflow to restart animation
+      el.classList.add('pop');
+    }
+
+    // ── Speech synthesis ──────────────────────────────────────────────────
+    function speak(text) {
+      if (!window.speechSynthesis) return;
+      window.speechSynthesis.cancel();
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = 1.1;
+      window.speechSynthesis.speak(utt);
+    }
+
+    // ── Packet-rate ticker ────────────────────────────────────────────────
+    setInterval(() => {
+      const rate  = pktCount;
+      pktCount    = 0;
+      if (!ble.connected) { pktRateLbl.textContent = ''; return; }
+      const color = rate === 0 ? '#e74c3c' : rate < 7 ? '#e67e22' : '#555566';
+      pktRateLbl.style.color  = color;
+      pktRateLbl.textContent  = rate === 0 ? '0 pkt/s ⚠' : `${rate} pkt/s`;
+    }, 1000);
+
+    // ── Button handlers ───────────────────────────────────────────────────
+    connectBtn.addEventListener('click', async () => {
+      if (ble.connected) {
+        ble.disconnect();
+        return;
+      }
+      connectBtn.disabled = true;
+      try {
+        await ble.connect();
+      } catch (_) {
+        // onBleStatus handles UI reset
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      classifier.reset();
+      parser.reset();
+      makes = 0;
+      total = 0;
+      if (flashTimer) clearTimeout(flashTimer);
+      refreshScore();
+      if (ble.connected) {
+        setEvent('cleared — recalibrating baseline…', '#f39c12');
+        showCalBar(true);
+        calBar.classList.remove('done');
+        calBar.style.width = '0%';
+      } else {
+        setEvent('tap Connect to start', '#444455');
+      }
+      console.log('Score cleared.');
+    });
+  </script>
+</body>
+</html>
