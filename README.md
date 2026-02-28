@@ -2,7 +2,7 @@
 
 A zero-install basketball scoreboard that runs in your browser over Web Bluetooth.
 
-**Live app** → [https://YOUR-GITHUB-USERNAME.github.io/basket_counting/](https://YOUR-GITHUB-USERNAME.github.io/basket_counting/)
+**Live app** → [https://jrklab.github.io/basket_counting/](https://jrklab.github.io/basket_counting/)
 
 ## How it works
 
