@@ -22,7 +22,8 @@ class BaselineCalibrator {
     this._ax = []; this._ay = []; this._az = [];
     this._gx = []; this._gy = []; this._gz = [];
     this._sr = [];
-    this._startTime = null;
+    this._startTime     = null;   // packet-timestamp base (for finalize check)
+    this._wallStartTime = null;   // performance.now() base (for progress display)
     this._complete  = false;
 
     // Public baselines — null until complete
@@ -34,10 +35,10 @@ class BaselineCalibrator {
   get isComplete() { return this._complete; }
 
   get progress() {
-    if (this._startTime === null) return 0;
+    if (this._wallStartTime === null) return 0;
     if (this._complete) return 1;
     return Math.min(
-      (performance.now() / 1000 - this._startTime) / BaselineCalibrator.CALIBRATION_DURATION,
+      (performance.now() / 1000 - this._wallStartTime) / BaselineCalibrator.CALIBRATION_DURATION,
       1
     );
   }
@@ -47,7 +48,10 @@ class BaselineCalibrator {
     if (this._complete) return false;
 
     const t = timestampSec ?? (performance.now() / 1000);
-    if (this._startTime === null) this._startTime = t;
+    if (this._startTime === null) {
+      this._startTime     = t;
+      this._wallStartTime = performance.now() / 1000;
+    }
 
     if (t - this._startTime >= BaselineCalibrator.CALIBRATION_DURATION)
       return this._finalize();

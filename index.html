@@ -78,20 +78,20 @@
     }
 
     #makes-label {
-      font-size: clamp(80px, 22vw, 140px);
+      font-size: clamp(120px, 33vw, 210px);
       font-weight: 900;
       color: var(--score);
       line-height: 1;
     }
 
     #sep {
-      font-size: clamp(40px, 10vw, 70px);
+      font-size: clamp(60px, 15vw, 105px);
       color: var(--total);
       line-height: 1;
     }
 
     #total-label {
-      font-size: clamp(40px, 10vw, 70px);
+      font-size: clamp(60px, 15vw, 105px);
       color: var(--total);
       line-height: 1;
     }
@@ -178,6 +178,66 @@
     #unsupported h2   { color: var(--miss); font-size: 1.3rem; }
     #unsupported p    { color: #aab; max-width: 340px; line-height: 1.5; }
 
+    /* ── Threshold config panel ───────────────────────────────────────────── */
+    #threshold-cfg {
+      width: min(96%, 480px);
+      background: #141b26;
+      border: 1px solid #1e2736;
+      border-radius: 8px;
+      padding: 8px 12px 10px;
+      margin-top: 8px;
+    }
+
+    .cfg-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 0.75rem;
+      color: #667;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    #thresh-default-btn {
+      padding: 3px 10px;
+      border: 1px solid #334;
+      border-radius: 4px;
+      background: #1e2736;
+      color: #aab;
+      font-size: 0.78rem;
+      cursor: pointer;
+    }
+    #thresh-default-btn:active { filter: brightness(0.8); }
+
+    .cfg-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 14px;
+    }
+
+    .cfg-grid label {
+      display: flex;
+      flex-direction: column;
+      font-size: 0.71rem;
+      color: #667;
+      gap: 2px;
+    }
+
+    .cfg-grid input[type=number] {
+      background: #0d1117;
+      border: 1px solid #2a3545;
+      border-radius: 4px;
+      color: #ccc;
+      padding: 4px 6px;
+      font-size: 0.85rem;
+      width: 100%;
+    }
+    .cfg-grid input[type=number]:focus {
+      outline: none;
+      border-color: var(--btn-blue);
+    }
+
     /* ── MAKE/MISS flash animation ────────────────────────────────────────── */
     @keyframes pop {
       0%   { transform: scale(1); }
@@ -225,17 +285,47 @@
     </div>
 
     <button id="clear-btn">Clear Score</button>
+
+    <!-- Threshold configuration -->
+    <section id="threshold-cfg">
+      <div class="cfg-header">
+        <span>⚙ Detection Thresholds</span>
+        <button id="thresh-default-btn">Default</button>
+      </div>
+      <div class="cfg-grid">
+        <label>Impact Accel (g)
+          <input id="t-impact"   type="number" step="0.1" min="0.1" max="10">
+        </label>
+        <label>ToF High (mm)
+          <input id="t-tof-high" type="number" step="10"  min="50"  max="2000">
+        </label>
+        <label>ToF Low (mm)
+          <input id="t-tof-low"  type="number" step="5"   min="0"   max="500">
+        </label>
+        <label>Signal Rate
+          <input id="t-sr"       type="number" step="50"  min="0"   max="5000">
+        </label>
+        <label>Max After Impact (s)
+          <input id="t-max-time" type="number" step="0.1" min="0.1" max="10">
+        </label>
+        <label>Blackout (s)
+          <input id="t-blackout" type="number" step="0.1" min="0.1" max="10">
+        </label>
+      </div>
+      <div id="baseline-vals" style="margin-top:6px;font-size:0.71rem;color:#667;"></div>
+    </section>
   </main>
 
   <footer>
     <span id="ble-status">BLE: disconnected</span>
+    <span id="rssi-label"></span>
     <span id="pkt-rate"></span>
   </footer>
 
   <script type="module">
     import { BLEReceiver } from './ble.js';
     import { PacketParser } from './parser.js';
-    import { ShotClassifier } from './classifier.js';
+    import { ShotClassifier, ThresholdConfig } from './classifier.js';
 
     // ── Browser capability check ─────────────────────────────────────────
     if (!navigator.bluetooth) {
@@ -243,16 +333,27 @@
     }
 
     // ── DOM refs ─────────────────────────────────────────────────────────
-    const makesLabel   = document.getElementById('makes-label');
-    const totalLabel   = document.getElementById('total-label');
-    const pctLabel     = document.getElementById('pct-label');
-    const eventLabel   = document.getElementById('event-label');
-    const connectBtn   = document.getElementById('connect-btn');
-    const clearBtn     = document.getElementById('clear-btn');
-    const bleStatus    = document.getElementById('ble-status');
-    const pktRateLbl   = document.getElementById('pkt-rate');
-    const calBarWrap   = document.getElementById('cal-bar-wrap');
-    const calBar       = document.getElementById('cal-bar');
+    const makesLabel      = document.getElementById('makes-label');
+    const totalLabel      = document.getElementById('total-label');
+    const pctLabel        = document.getElementById('pct-label');
+    const eventLabel      = document.getElementById('event-label');
+    const connectBtn      = document.getElementById('connect-btn');
+    const clearBtn        = document.getElementById('clear-btn');
+    const bleStatus       = document.getElementById('ble-status');
+    const rssiLabel       = document.getElementById('rssi-label');
+    const pktRateLbl      = document.getElementById('pkt-rate');
+    const baselineValsLbl = document.getElementById('baseline-vals');
+    const calBarWrap      = document.getElementById('cal-bar-wrap');
+    const calBar          = document.getElementById('cal-bar');
+
+    // Threshold inputs
+    const tImpact   = document.getElementById('t-impact');
+    const tTofHigh  = document.getElementById('t-tof-high');
+    const tTofLow   = document.getElementById('t-tof-low');
+    const tSr       = document.getElementById('t-sr');
+    const tMaxTime  = document.getElementById('t-max-time');
+    const tBlackout = document.getElementById('t-blackout');
+    const threshDefaultBtn = document.getElementById('thresh-default-btn');
 
     // ── App state ─────────────────────────────────────────────────────────
     let makes = 0, total = 0;
@@ -262,6 +363,41 @@
 
     const parser     = new PacketParser();
     const classifier = new ShotClassifier();
+
+    // ── Threshold config helpers ──────────────────────────────────────────
+    const DEFAULTS = new ThresholdConfig();
+
+    function loadThresholdInputs(cfg) {
+      tImpact.value   = cfg.IMPACT_ACCEL_THRESHOLD;
+      tTofHigh.value  = cfg.TOF_DISTANCE_THRESHOLD_HIGH;
+      tTofLow.value   = cfg.TOF_DISTANCE_THRESHOLD_LOW;
+      tSr.value       = cfg.TOF_SIGNAL_RATE_THRESHOLD;
+      tMaxTime.value  = cfg.MAX_TIME_AFTER_IMPACT;
+      tBlackout.value = cfg.BLACKOUT_WINDOW;
+    }
+
+    function applyThresholdInputs() {
+      const cfg = classifier.config;
+      cfg.IMPACT_ACCEL_THRESHOLD      = parseFloat(tImpact.value);
+      cfg.TOF_DISTANCE_THRESHOLD_HIGH = parseFloat(tTofHigh.value);
+      cfg.TOF_DISTANCE_THRESHOLD_LOW  = parseFloat(tTofLow.value);
+      cfg.TOF_SIGNAL_RATE_THRESHOLD   = parseFloat(tSr.value);
+      cfg.MAX_TIME_AFTER_IMPACT       = parseFloat(tMaxTime.value);
+      cfg.BLACKOUT_WINDOW             = parseFloat(tBlackout.value);
+    }
+
+    // Populate inputs with current classifier config on load
+    loadThresholdInputs(classifier.config);
+
+    // Apply immediately on any input change
+    [tImpact, tTofHigh, tTofLow, tSr, tMaxTime, tBlackout].forEach(el =>
+      el.addEventListener('change', applyThresholdInputs)
+    );
+
+    threshDefaultBtn.addEventListener('click', () => {
+      loadThresholdInputs(DEFAULTS);
+      applyThresholdInputs();
+    });
 
     // ── BLE receiver ─────────────────────────────────────────────────────
     const ble = new BLEReceiver(onPacket, onBleStatus);
@@ -289,14 +425,31 @@
           connectBtn.textContent = 'Connect';
           connectBtn.classList.remove('disconnect');
           connectBtn.disabled = false;
+          baselineValsLbl.textContent = '';
+          // Keep RSSI visible but dimmed so signal quality is still readable
+          if (rssiLabel.dataset.rssi) {
+            rssiLabel.style.color = '#445566';
+            rssiLabel.textContent = `~${rssiLabel.dataset.rssi} dBm`;
+          }
           if (total === 0) setEvent('tap Connect to start', getComputedStyle(document.documentElement).getPropertyValue('--idle'));
           showCalBar(false);
           break;
         case 'error':
           bleStatus.textContent = `BLE error: ${detail}`;
           bleStatus.style.color = '#e74c3c';
+          rssiLabel.textContent = '';
           connectBtn.disabled = false;
           break;
+        case 'rssi': {
+          const rssi = detail;  // numeric dBm
+          const color = rssi >= -60 ? '#2ecc71'
+                      : rssi >= -75 ? '#f39c12'
+                      : '#e74c3c';
+          rssiLabel.style.color = color;
+          rssiLabel.textContent = `${rssi} dBm`;
+          rssiLabel.dataset.rssi = rssi;  // latch for disconnect display
+          break;
+        }
         case 'cancelled':
           connectBtn.disabled = false;
           break;
@@ -349,6 +502,14 @@
       calBar.classList.add('done');
       setEvent('baseline ready — detecting shots', '#2ecc71');
       setTimeout(() => showCalBar(false), 800);
+
+      // Display baseline values inside the threshold panel
+      const cal = classifier.calibrator;
+      const fmt = v => v != null ? v.toFixed(2) : '—';
+      baselineValsLbl.textContent =
+        `Baseline — ` +
+        `AcX:${fmt(cal.accelX)}  AcY:${fmt(cal.accelY)}  AcZ:${fmt(cal.accelZ)} g  ·  ` +
+        `SR:${cal.signalRate != null ? cal.signalRate.toFixed(0) : '—'}`;
     }
 
     // ── Shot handler ──────────────────────────────────────────────────────
@@ -437,6 +598,7 @@
       total = 0;
       if (flashTimer) clearTimeout(flashTimer);
       refreshScore();
+      baselineValsLbl.textContent = '';
       if (ble.connected) {
         setEvent('cleared — recalibrating baseline…', '#f39c12');
         showCalBar(true);
