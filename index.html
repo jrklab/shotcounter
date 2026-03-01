@@ -418,8 +418,10 @@
           connectBtn.classList.add('disconnect');
           setEvent('calibrating baseline…  0%', '#f39c12');
           showCalBar(true);
+          startKeepAlive();
           break;
         case 'disconnected':
+          stopKeepAlive();
           bleStatus.textContent = 'BLE: disconnected';
           bleStatus.style.color = '#e74c3c';
           connectBtn.textContent = 'Connect';
@@ -435,6 +437,7 @@
           showCalBar(false);
           break;
         case 'error':
+          stopKeepAlive();
           bleStatus.textContent = `BLE error: ${detail}`;
           bleStatus.style.color = '#e74c3c';
           rssiLabel.textContent = '';
@@ -558,6 +561,42 @@
       el.classList.add('pop');
     }
 
+    // ── Wake lock + silent-audio keepalive ────────────────────────────────
+    // Prevents the browser from suspending speech synthesis when the screen
+    // goes dark during BLE playback.
+    let _wakeLock  = null;
+    let _silentCtx = null;   // created inside the Connect click (user-gesture)
+    let _silentSrc = null;
+
+    function startKeepAlive() {
+      // Screen wake lock (Chrome 84+, Safari 16.4+, Firefox partial)
+      if ('wakeLock' in navigator) {
+        navigator.wakeLock.request('screen')
+          .then(lock => {
+            _wakeLock = lock;
+            _wakeLock.addEventListener('release', () => { _wakeLock = null; });
+          })
+          .catch(() => {});   // silently ignore – not all browsers support it
+      }
+      // Silent looping buffer keeps the OS audio pipeline awake in background
+      if (_silentCtx && _silentCtx.state !== 'closed') {
+        if (_silentCtx.state === 'suspended') _silentCtx.resume();
+        if (_silentSrc) { try { _silentSrc.stop(); } catch (_) {} }
+        const buf = _silentCtx.createBuffer(1, _silentCtx.sampleRate, _silentCtx.sampleRate);
+        const src = _silentCtx.createBufferSource();
+        src.buffer = buf;
+        src.loop   = true;
+        src.connect(_silentCtx.destination);
+        src.start();
+        _silentSrc = src;
+      }
+    }
+
+    function stopKeepAlive() {
+      if (_wakeLock) { _wakeLock.release().catch(() => {}); _wakeLock = null; }
+      if (_silentSrc) { try { _silentSrc.stop(); _silentSrc.disconnect(); } catch (_) {} _silentSrc = null; }
+    }
+
     // ── Speech synthesis ──────────────────────────────────────────────────
     function speak(text) {
       if (!window.speechSynthesis) return;
@@ -579,6 +618,15 @@
 
     // ── Button handlers ───────────────────────────────────────────────────
     connectBtn.addEventListener('click', async () => {
+      // Unlock speech synthesis AND create AudioContext within this user
+      // gesture so mobile browsers allow later async calls (BLE callbacks).
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+      }
+      if (!_silentCtx || _silentCtx.state === 'closed') {
+        _silentCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
       if (ble.connected) {
         ble.disconnect();
         return;
