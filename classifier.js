@@ -4,7 +4,9 @@
  *
  * Matches the Python implementation exactly:
  *   - BaselineCalibrator: MAD-filtered per-axis baselines, 3-second window
- *   - ShotClassifier: same state machine (IDLE → IMPACT_DETECTED → BLACKOUT)
+ *   - ShotClassifier: state machine with two-sample basket confirmation and
+ *     clear-to-emit MAKE logic (IDLE → IMPACT_DETECTED → BASKET_PENDING →
+ *     BASKET_DETECTED → BLACKOUT)
  */
 
 'use strict';
@@ -112,12 +114,12 @@ class BaselineCalibrator {
 
 class ThresholdConfig {
   constructor() {
-    this.IMPACT_ACCEL_THRESHOLD         = 1;    // g above baseline
-    this.TOF_DISTANCE_THRESHOLD_HIGH    = 400;  // mm
-    this.TOF_DISTANCE_THRESHOLD_LOW     = 80;   // mm
+    this.IMPACT_ACCEL_THRESHOLD         = 1;     // g above baseline
+    this.TOF_DISTANCE_THRESHOLD_HIGH    = 360;   // mm
+    this.TOF_DISTANCE_THRESHOLD_LOW     = 60;    // mm
     this.TOF_SIGNAL_RATE_THRESHOLD      = 800;
-    this.MAX_TIME_AFTER_IMPACT          = 1.5;  // s
-    this.BLACKOUT_WINDOW                = 1.0;  // s
+    this.MAX_TIME_AFTER_IMPACT          = 1.5;   // s
+    this.BLACKOUT_WINDOW                = 1.0;   // s
   }
 }
 
@@ -128,7 +130,8 @@ class ThresholdConfig {
 const STATE = Object.freeze({
   IDLE:             'IDLE',
   IMPACT_DETECTED:  'IMPACT_DETECTED',
-  BASKET_DETECTED:  'BASKET_DETECTED',
+  BASKET_PENDING:   'BASKET_PENDING',   // 1st basket sample seen, awaiting 2nd
+  BASKET_DETECTED:  'BASKET_DETECTED',  // confirmed basket, awaiting TOF clear
   BLACKOUT:         'BLACKOUT',
 });
 
@@ -143,6 +146,7 @@ class ShotClassifier {
     this.state          = STATE.IDLE;
     this.stateStartTime = null;
     this.impactTime     = null;
+    this._basketOrigin  = null;   // 'SWISH' | 'BANK' — set in BASKET_PENDING
   }
 
   reset() {
@@ -152,6 +156,7 @@ class ShotClassifier {
     this.state          = STATE.IDLE;
     this.stateStartTime = null;
     this.impactTime     = null;
+    this._basketOrigin  = null;
     this.calibrator     = new BaselineCalibrator();
   }
 
@@ -225,18 +230,19 @@ class ShotClassifier {
     }
 
     let shot = null;
-    const cfg = this.config;
+    const cfg        = this.config;
+    const basketNow  = type === 'tof' && this._isBasketEvent(distance, signalRate);
 
     if (this.state === STATE.IDLE) {
       if (type === 'mpu' && magnitude > cfg.IMPACT_ACCEL_THRESHOLD) {
         this.state          = STATE.IMPACT_DETECTED;
         this.stateStartTime = ts;
         this.impactTime     = ts;
-      } else if (type === 'tof' && this._isBasketEvent(distance, signalRate)) {
-        shot = { impact_time: null, basket_time: ts,
-                 classification: 'MAKE', basket_type: 'SWISH', confidence: 0.85 };
-        this.state          = STATE.BLACKOUT;
+      } else if (basketNow) {
+        // First basket sample — enter pending, wait for confirmation
+        this.state          = STATE.BASKET_PENDING;
         this.stateStartTime = ts;
+        this._basketOrigin  = 'SWISH';
       }
 
     } else if (this.state === STATE.IMPACT_DETECTED) {
@@ -246,12 +252,52 @@ class ShotClassifier {
                  classification: 'MISS', basket_type: null, confidence: 0.85 };
         this.state          = STATE.IDLE;
         this.stateStartTime = ts;
-      } else if (type === 'tof' && this._isBasketEvent(distance, signalRate)) {
-        shot = { impact_time: this.impactTime, basket_time: ts,
-                 classification: 'MAKE', basket_type: 'BANK', confidence: 0.95 };
-        this.state          = STATE.BLACKOUT;
+      } else if (basketNow) {
+        // First basket sample after impact — enter pending (BANK path)
+        this.state          = STATE.BASKET_PENDING;
         this.stateStartTime = ts;
+        this._basketOrigin  = 'BANK';
       }
+
+    } else if (this.state === STATE.BASKET_PENDING) {
+      if (type === 'tof') {
+        if (basketNow) {
+          // Second consecutive basket sample — confirmed
+          this.state          = STATE.BASKET_DETECTED;
+          this.stateStartTime = ts;
+        } else {
+          // Single sample was noise — BANK path: resume impact watch; SWISH: back to IDLE
+          if (this._basketOrigin === 'BANK') {
+            this.state          = STATE.IMPACT_DETECTED;
+            this.stateStartTime = this.impactTime;
+          } else {
+            this.state          = STATE.IDLE;
+            this.stateStartTime = null;
+            this.impactTime     = null;
+          }
+          this._basketOrigin = null;
+        }
+      }
+      // MPU samples while pending are ignored
+
+    } else if (this.state === STATE.BASKET_DETECTED) {
+      if (type === 'tof') {
+        if (!basketNow) {
+          // TOF cleared — ball has passed through: emit MAKE
+          shot = {
+            impact_time:    this.impactTime,
+            basket_time:    ts,
+            classification: 'MAKE',
+            basket_type:    this._basketOrigin,
+            confidence:     this._basketOrigin === 'BANK' ? 0.95 : 0.85,
+          };
+          this.state          = STATE.BLACKOUT;
+          this.stateStartTime = ts;
+          this._basketOrigin  = null;
+        }
+        // basketNow=true: ball still over sensor, stay in BASKET_DETECTED
+      }
+      // MPU samples while basket confirmed are ignored
     }
 
     return shot;
