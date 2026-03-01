@@ -417,6 +417,10 @@
           connectBtn.textContent = 'Disconnect';
           connectBtn.classList.add('disconnect');
           connectBtn.disabled = false;
+          // Reset classifier and parser so calibration runs fresh on every connection.
+          // Score (makes/total) is intentionally preserved in case of a brief drop/reconnect.
+          classifier.reset();
+          parser.reset();
           setEvent('calibrating baseline…  0%', '#f39c12');
           showCalBar(true);
           startKeepAlive();
