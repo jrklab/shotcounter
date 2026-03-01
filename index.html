@@ -561,41 +561,46 @@
       el.classList.add('pop');
     }
 
-    // ── Wake lock + silent-audio keepalive ────────────────────────────────
-    // Prevents the browser from suspending speech synthesis when the screen
-    // goes dark during BLE playback.
-    let _wakeLock  = null;
-    let _silentCtx = null;   // created inside the Connect click (user-gesture)
-    let _silentSrc = null;
+    // ── Wake lock + audio keepalive ──────────────────────────────────────
+    // Strategy: use an <audio> element with srcObject to register this page
+    // as an OS audio session (like a music app), which grants background audio
+    // privileges so speech synthesis keeps working when the screen goes dark.
+    // A near-silent oscillator (gain 0.001, ~60 dB below normal — inaudible)
+    // keeps the OS audio pipeline active without truly-silent buffers that
+    // browsers detect and suspend.  Wake lock prevents the screen dimming
+    // when available (requires HTTPS; silently ignored otherwise).
+    let _wakeLock    = null;
+    let _audioCtx    = null;  // created in Connect click (user-gesture required)
+    let _keepAliveEl = null;  // <audio> element — registers the OS audio session
 
-    function startKeepAlive() {
-      // Screen wake lock (Chrome 84+, Safari 16.4+, Firefox partial)
+    function _requestWakeLock() {
       if ('wakeLock' in navigator) {
         navigator.wakeLock.request('screen')
           .then(lock => {
             _wakeLock = lock;
             _wakeLock.addEventListener('release', () => { _wakeLock = null; });
           })
-          .catch(() => {});   // silently ignore – not all browsers support it
+          .catch(() => {});
       }
-      // Silent looping buffer keeps the OS audio pipeline awake in background
-      if (_silentCtx && _silentCtx.state !== 'closed') {
-        if (_silentCtx.state === 'suspended') _silentCtx.resume();
-        if (_silentSrc) { try { _silentSrc.stop(); } catch (_) {} }
-        const buf = _silentCtx.createBuffer(1, _silentCtx.sampleRate, _silentCtx.sampleRate);
-        const src = _silentCtx.createBufferSource();
-        src.buffer = buf;
-        src.loop   = true;
-        src.connect(_silentCtx.destination);
-        src.start();
-        _silentSrc = src;
-      }
+    }
+
+    function startKeepAlive() {
+      _requestWakeLock();
+      if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume();
     }
 
     function stopKeepAlive() {
       if (_wakeLock) { _wakeLock.release().catch(() => {}); _wakeLock = null; }
-      if (_silentSrc) { try { _silentSrc.stop(); _silentSrc.disconnect(); } catch (_) {} _silentSrc = null; }
+      // Keep _audioCtx + _keepAliveEl running — stopping requires another
+      // user gesture to restart; negligible battery cost at gain 0.001.
     }
+
+    // Re-acquire wake lock and resume AudioContext when user returns to tab
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume();
+      if (ble.connected) _requestWakeLock();
+    });
 
     // ── Speech synthesis ──────────────────────────────────────────────────
     function speak(text) {
@@ -624,8 +629,26 @@
         window.speechSynthesis.cancel();
         window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
       }
-      if (!_silentCtx || _silentCtx.state === 'closed') {
-        _silentCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (!_audioCtx || _audioCtx.state === 'closed') {
+        _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        // Route a near-silent oscillator to a MediaStreamDestination so the
+        // <audio> element below can register an OS audio session, giving this
+        // page background-audio privileges (same as a music/podcast app).
+        const dest = _audioCtx.createMediaStreamDestination();
+        const osc  = _audioCtx.createOscillator();
+        const gain = _audioCtx.createGain();
+        gain.gain.value = 0.001;          // ~60 dB below audible — inaudible
+        osc.connect(gain);
+        gain.connect(dest);               // → <audio> srcObject (OS session)
+        gain.connect(_audioCtx.destination); // → speakers (speechSynthesis)
+        osc.start();
+        _keepAliveEl = new Audio();
+        _keepAliveEl.srcObject = dest.stream;
+        _keepAliveEl.play().catch(() => {});
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.metadata =
+            new MediaMetadata({ title: 'Basketball Score 🏀', artist: 'Live' });
+        }
       }
       if (ble.connected) {
         ble.disconnect();
