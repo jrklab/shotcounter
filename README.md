@@ -2,7 +2,7 @@
 
 A zero-install basketball scoreboard that runs in your browser over Web Bluetooth.
 
-**Live app** → [Basketball Score](https://jrklab.github.io/basket_counting/)
+**Live app** → [Basketball Score](https://jrklab.github.io/shotcounter/)
 
 ## How it works
 
@@ -40,12 +40,12 @@ src/web/
 1. Push the repo to GitHub.
 2. Go to **Settings → Pages**.
 3. Under *Source*, select **Deploy from a branch**.
-4. Branch: `main` (or your default branch), folder: **`/src/web`**.
+4. Branch: `main`, folder: **`/ (root)`**.
 5. Click **Save**.
 
 GitHub will publish the app at:
 ```
-https://<your-username>.github.io/<repo-name>/
+https://jrklab.github.io/shotcounter/
 ```
 
 Replace the link at the top of this file with your actual URL, then share it — anyone with a supported browser can open it without installing anything.
