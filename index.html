@@ -416,6 +416,7 @@
           bleStatus.style.color = '#2ecc71';
           connectBtn.textContent = 'Disconnect';
           connectBtn.classList.add('disconnect');
+          connectBtn.disabled = false;
           setEvent('calibrating baseline…  0%', '#f39c12');
           showCalBar(true);
           startKeepAlive();
