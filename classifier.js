@@ -117,7 +117,7 @@ class ThresholdConfig {
     this.IMPACT_ACCEL_THRESHOLD         = 1;     // g above baseline
     this.TOF_DISTANCE_THRESHOLD_HIGH    = 360;   // mm
     this.TOF_DISTANCE_THRESHOLD_LOW     = 60;    // mm
-    this.TOF_SIGNAL_RATE_THRESHOLD      = 800;
+    this.TOF_SIGNAL_RATE_THRESHOLD      = 500;
     this.MAX_TIME_AFTER_IMPACT          = 1.5;   // s
     this.BLACKOUT_WINDOW                = 1.0;   // s
   }
@@ -166,7 +166,7 @@ class ShotClassifier {
    * @returns {Array} newly completed shots
    */
   processBatch(batch) {
-    const INVALID = new Set([0xFFFE, 65534, 0xFFFF, 65535, -1]);
+    const INVALID = new Set([0xFFFE, 65534]);
 
     for (const s of batch) {
       const accel      = s.accel;
