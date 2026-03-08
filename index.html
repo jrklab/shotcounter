@@ -162,6 +162,22 @@
     #ble-status { color: #555566; }
     #pkt-rate   { color: #555566; }
 
+    /* ── Device info bar ────────────────────────────────────────────────── */
+    #device-info-bar {
+      width: 100%;
+      padding: 4px 14px;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      align-items: center;
+      background: #0d1117;
+      border-top: 1px solid #1a2233;
+      font-size: 0.76rem;
+      color: #445566;
+    }
+    #device-info-bar .di-item { display: flex; gap: 5px; align-items: center; }
+    #device-info-bar .di-val  { font-weight: bold; color: #667788; }
+
     /* ── Unsupported overlay ─────────────────────────────────────────────── */
     #unsupported {
       display: none;
@@ -316,6 +332,13 @@
     </section>
   </main>
 
+  <div id="device-info-bar">
+    <span class="di-item">HW <span id="di-hw" class="di-val">–</span></span>
+    <span class="di-item">FW <span id="di-fw" class="di-val">–</span></span>
+    <span class="di-item">🔋 <span id="di-batt" class="di-val">–</span></span>
+    <span class="di-item">🌡 <span id="di-temp" class="di-val">–</span></span>
+  </div>
+
   <footer>
     <span id="ble-status">BLE: disconnected</span>
     <span id="rssi-label"></span>
@@ -345,6 +368,12 @@
     const baselineValsLbl = document.getElementById('baseline-vals');
     const calBarWrap      = document.getElementById('cal-bar-wrap');
     const calBar          = document.getElementById('cal-bar');
+
+    // Device info
+    const diHw   = document.getElementById('di-hw');
+    const diFw   = document.getElementById('di-fw');
+    const diBatt = document.getElementById('di-batt');
+    const diTemp = document.getElementById('di-temp');
 
     // Threshold inputs
     const tImpact   = document.getElementById('t-impact');
@@ -467,8 +496,9 @@
     // ── Packet handler ────────────────────────────────────────────────────
     function onPacket(dataView) {
       pktCount++;
-      const { batch, lostPackets } = parser.parse(dataView);
+      const { batch, lostPackets, deviceInfo } = parser.parse(dataView);
       if (lostPackets > 0) console.warn(`Packet loss: ${lostPackets}`);
+      if (deviceInfo) updateDeviceInfo(deviceInfo);
       if (!batch) return;
 
       const cal         = classifier.calibrator;
@@ -492,6 +522,22 @@
     }
 
     // ── Calibration UI ────────────────────────────────────────────────────
+    function updateDeviceInfo({ hwVersion, fwVersion, battMv, tempC }) {
+      diHw.textContent = `v${hwVersion}`;
+      diFw.textContent = `v${fwVersion}`;
+      if (battMv === 0) {
+        diBatt.textContent = '–';
+        diBatt.style.color = '#445566';
+      } else {
+        const battV = (battMv / 1000).toFixed(2);
+        diBatt.textContent = `${battV} V`;
+        diBatt.style.color = battMv >= 3700 ? '#2ecc71' : battMv >= 3500 ? '#f39c12' : '#e74c3c';
+      }
+      const tempSign = tempC >= 0 ? '' : '−';
+      diTemp.textContent = `${tempSign}${Math.abs(tempC)}°C`;
+      diTemp.style.color = tempC > 70 ? '#e74c3c' : tempC > 55 ? '#f39c12' : '#667788';
+    }
+
     function showCalBar(visible) {
       calBarWrap.classList.toggle('visible', visible);
       if (!visible) {
