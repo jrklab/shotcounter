@@ -64,6 +64,7 @@ let allSensorData  = [];    // full session sensor log (for CSV export)
 let mediaStream       = null;
 let mediaRecorder     = null;
 let videoChunks       = [];    // rolling [{data: Blob, startMs: number, endMs: number}]
+let videoInitSegment  = null;  // first MediaRecorder chunk (WebM init/codec headers)
 let videoMimeType     = 'video/webm';
 let videoEnabled      = false;
 let recordingStartMs  = 0;     // absolute performance.now() when recording began
@@ -452,6 +453,7 @@ function startVideoRecording() {
   ];
   videoMimeType     = mimeOptions.find(m => MediaRecorder.isTypeSupported(m)) ?? '';
   videoChunks       = [];
+  videoInitSegment  = null;
   recordingChunkSeq = 0;
   recordingStartMs  = performance.now();
 
@@ -464,6 +466,12 @@ function startVideoRecording() {
       if (evt.data.size > 0) {
         const startMs = recordingChunkSeq * VIDEO_TIMESLICE_MS;
         const endMs   = startMs + VIDEO_TIMESLICE_MS;
+        // Save the very first chunk as the WebM init/codec segment.
+        // It must be prepended to every extracted clip for the video to be
+        // decodable (especially on Android where keyframe-less WebM fails).
+        if (recordingChunkSeq === 0) {
+          videoInitSegment = evt.data;
+        }
         recordingChunkSeq++;
         videoChunks.push({ data: evt.data, startMs, endMs });
         if (videoChunks.length > VIDEO_BUFFER_CHUNKS) {
@@ -512,7 +520,14 @@ function scheduleClipExtraction(evObj) {
     const postChunks = videoChunks.filter(c => c.startMs > eventTs && c.startMs <= eventTs + EVENT_POST_MS);
     const combined   = [...preChunks, ...postChunks].sort((a, b) => a.startMs - b.startMs);
     if (combined.length > 0) {
-      evObj.clipBlob = new Blob(combined.map(c => c.data), { type: videoMimeType || 'video/webm' });
+      // Always prepend the WebM initialization segment (first recorded chunk) so
+      // the browser can decode the clip even when chunk 0 has been evicted from
+      // the rolling buffer.  Avoid duplicating it if it's already the first chunk.
+      const firstChunkStartMs = combined[0].startMs;
+      const blobParts = (videoInitSegment && firstChunkStartMs > 0)
+        ? [videoInitSegment, ...combined.map(c => c.data)]
+        : combined.map(c => c.data);
+      evObj.clipBlob = new Blob(blobParts, { type: videoMimeType || 'video/webm' });
     }
   }, EVENT_POST_MS + VIDEO_TIMESLICE_MS * 2);
 }
@@ -771,10 +786,6 @@ async function startUpload() {
       updateBar();
     }
 
-    // Flatten sensor data
-    const mpuArr = ev.sensorSnap.flatMap(s => [...s.accel, ...s.gyro]);
-    const tofArr = ev.sensorSnap.map(s => s.distance);
-
     // Save shot document
     try {
       setStatus(`Saving shot ${i + 1} / ${sessionEvents.length}…`);
@@ -786,8 +797,6 @@ async function startUpload() {
         basket_type:   ev.shot.basket_type ?? null,
         user_label:    ev.label,
         confidence:    ev.shot.confidence ?? 0,
-        sensor_mpu:    mpuArr.slice(-600),   // last ~1 s of MPU (trim for Firestore doc size)
-        sensor_tof:    tofArr.slice(-60),    // last ~1 s of ToF
         video_url:     videoUrl,
       });
       shotIds.push(id);
