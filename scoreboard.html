@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>🏀 Basketball Score</title>
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d1117;
+      --score:     #f0e040;
+      --total:     #888888;
+      --make:      #2ecc71;
+      --miss:      #e74c3c;
+      --idle:      #444455;
+      --orange:    #f39c12;
+      --btn-red:   #c0392b;
+      --btn-blue:  #2980b9;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: #ccc;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0;
+      touch-action: manipulation;
+    }
+
+    /* ── Header ───────────────────────────────────────────────────────────── */
+    header {
+      width: 100%;
+      padding: 10px 16px 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #1e2736;
+    }
+
+    header h1 { font-size: 1.1rem; font-weight: 600; color: #aab; }
+
+    #connect-btn {
+      padding: 7px 18px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: bold;
+      cursor: pointer;
+      background: var(--btn-blue);
+      color: #fff;
+      transition: background 0.2s;
+    }
+    #connect-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #connect-btn.disconnect { background: #555; }
+
+    /* ── Main scoreboard ─────────────────────────────────────────────────── */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      padding: 10px;
+    }
+
+    #score-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    #makes-label {
+      font-size: clamp(120px, 33vw, 210px);
+      font-weight: 900;
+      color: var(--score);
+      line-height: 1;
+    }
+
+    #sep {
+      font-size: clamp(60px, 15vw, 105px);
+      color: var(--total);
+      line-height: 1;
+    }
+
+    #total-label {
+      font-size: clamp(60px, 15vw, 105px);
+      color: var(--total);
+      line-height: 1;
+    }
+
+    #pct-label {
+      font-size: clamp(22px, 6vw, 36px);
+      color: var(--total);
+    }
+
+    #event-label {
+      font-size: clamp(16px, 4.5vw, 24px);
+      font-style: italic;
+      color: var(--idle);
+      min-height: 2em;
+      text-align: center;
+      padding: 0 12px;
+      transition: color 0.2s;
+    }
+
+    /* ── Calibration progress bar ─────────────────────────────────────────── */
+    #cal-bar-wrap {
+      width: min(90%, 360px);
+      height: 6px;
+      background: #1e2736;
+      border-radius: 3px;
+      overflow: hidden;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #cal-bar-wrap.visible { opacity: 1; }
+
+    #cal-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--orange);
+      border-radius: 3px;
+      transition: width 0.4s, background 0.4s;
+    }
+    #cal-bar.done { background: var(--make); width: 100%; }
+
+    /* ── Buttons ──────────────────────────────────────────────────────────── */
+    #clear-btn {
+      margin-top: 10px;
+      padding: 12px 32px;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: bold;
+      cursor: pointer;
+      background: var(--btn-red);
+      color: #fff;
+      touch-action: manipulation;
+    }
+    #clear-btn:active { filter: brightness(0.85); }
+
+    /* ── Footer status bar ────────────────────────────────────────────────── */
+    footer {
+      width: 100%;
+      padding: 6px 14px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid #1e2736;
+      font-size: 0.78rem;
+      color: #555566;
+    }
+
+    #ble-status { color: #555566; }
+    #pkt-rate   { color: #555566; }
+
+    /* ── Device info bar ────────────────────────────────────────────────── */
+    #device-info-bar {
+      width: 100%;
+      padding: 4px 14px;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      align-items: center;
+      background: #0d1117;
+      border-top: 1px solid #1a2233;
+      font-size: 0.76rem;
+      color: #445566;
+    }
+    #device-info-bar .di-item { display: flex; gap: 5px; align-items: center; }
+    #device-info-bar .di-val  { font-weight: bold; color: #667788; }
+
+    /* ── Unsupported overlay ─────────────────────────────────────────────── */
+    #unsupported {
+      display: none;
+      position: fixed; inset: 0;
+      background: #0d1117ee;
+      align-items: center; justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      text-align: center;
+      padding: 24px;
+      z-index: 99;
+    }
+    #unsupported.show { display: flex; }
+    #unsupported h2   { color: var(--miss); font-size: 1.3rem; }
+    #unsupported p    { color: #aab; max-width: 340px; line-height: 1.5; }
+
+    /* ── Threshold config panel ───────────────────────────────────────────── */
+    #threshold-cfg {
+      width: min(96%, 480px);
+      background: #141b26;
+      border: 1px solid #1e2736;
+      border-radius: 8px;
+      padding: 8px 12px 10px;
+      margin-top: 8px;
+    }
+
+    .cfg-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 0.75rem;
+      color: #667;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    #thresh-default-btn {
+      padding: 3px 10px;
+      border: 1px solid #334;
+      border-radius: 4px;
+      background: #1e2736;
+      color: #aab;
+      font-size: 0.78rem;
+      cursor: pointer;
+    }
+    #thresh-default-btn:active { filter: brightness(0.8); }
+
+    .cfg-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 14px;
+    }
+
+    .cfg-grid label {
+      display: flex;
+      flex-direction: column;
+      font-size: 0.71rem;
+      color: #667;
+      gap: 2px;
+    }
+
+    .cfg-grid input[type=number] {
+      background: #0d1117;
+      border: 1px solid #2a3545;
+      border-radius: 4px;
+      color: #ccc;
+      padding: 4px 6px;
+      font-size: 0.85rem;
+      width: 100%;
+    }
+    .cfg-grid input[type=number]:focus {
+      outline: none;
+      border-color: var(--btn-blue);
+    }
+
+    /* ── MAKE/MISS flash animation ────────────────────────────────────────── */
+    @keyframes pop {
+      0%   { transform: scale(1); }
+      40%  { transform: scale(1.12); }
+      100% { transform: scale(1); }
+    }
+    .pop { animation: pop 0.35s ease-out; }
+  </style>
+</head>
+<body>
+
+  <!-- Unsupported browser overlay -->
+  <div id="unsupported">
+    <h2>Web Bluetooth not available</h2>
+    <p>
+      <strong>On Linux / Chrome:</strong> Web Bluetooth is disabled by default.<br>
+      Go to <code style="background:#1e2736;padding:2px 6px;border-radius:4px;">chrome://flags/#enable-experimental-web-platform-features</code>,
+      set it to <em>Enabled</em>, then relaunch Chrome.
+    </p>
+    <p style="margin-top:12px;">
+      <strong>On Android:</strong> use Chrome or Edge — works out of the box.<br>
+      <strong>iOS Safari:</strong> not supported (Apple restriction).<br>
+      <strong>Firefox:</strong> not supported.
+    </p>
+  </div>
+
+  <header>
+    <h1>🏀 Basketball Score</h1>
+    <button id="connect-btn">Connect</button>
+  </header>
+
+  <main>
+    <div id="score-row">
+      <span id="makes-label">0</span>
+      <span id="sep"> / </span>
+      <span id="total-label">0</span>
+    </div>
+
+    <div id="pct-label">— %</div>
+
+    <div id="event-label">tap Connect to start</div>
+
+    <div id="cal-bar-wrap">
+      <div id="cal-bar"></div>
+    </div>
+
+    <button id="clear-btn">Clear Score</button>
+
+    <!-- Threshold configuration -->
+    <section id="threshold-cfg">
+      <div class="cfg-header">
+        <span>⚙ Detection Thresholds</span>
+        <button id="thresh-default-btn">Default</button>
+      </div>
+      <div class="cfg-grid">
+        <label>Impact Accel (g)
+          <input id="t-impact"   type="number" step="0.1" min="0.1" max="10">
+        </label>
+        <label>ToF High (mm)
+          <input id="t-tof-high" type="number" step="10"  min="50"  max="2000">
+        </label>
+        <label>ToF Low (mm)
+          <input id="t-tof-low"  type="number" step="5"   min="0"   max="500">
+        </label>
+        <label>Signal Rate
+          <input id="t-sr"       type="number" step="50"  min="0"   max="5000">
+        </label>
+        <label>Max After Impact (s)
+          <input id="t-max-time" type="number" step="0.1" min="0.1" max="10">
+        </label>
+        <label>Blackout (s)
+          <input id="t-blackout" type="number" step="0.1" min="0.1" max="10">
+        </label>
+      </div>
+      <div id="baseline-vals" style="margin-top:6px;font-size:0.71rem;color:#667;"></div>
+    </section>
+  </main>
+
+  <div id="device-info-bar">
+    <span class="di-item">HW <span id="di-hw" class="di-val">–</span></span>
+    <span class="di-item">FW <span id="di-fw" class="di-val">–</span></span>
+    <span class="di-item">🔋 <span id="di-batt" class="di-val">–</span></span>
+    <span class="di-item">🌡 <span id="di-temp" class="di-val">–</span></span>
+  </div>
+
+  <footer>
+    <span id="ble-status">BLE: disconnected</span>
+    <span id="rssi-label"></span>
+    <span id="pkt-rate"></span>
+  </footer>
+
+  <script type="module">
+    import { BLEReceiver } from './ble.js';
+    import { PacketParser } from './parser.js';
+    import { ShotClassifier, ThresholdConfig } from './classifier.js';
+
+    // ── Browser capability check ─────────────────────────────────────────
+    if (!navigator.bluetooth) {
+      document.getElementById('unsupported').classList.add('show');
+    }
+
+    // ── DOM refs ─────────────────────────────────────────────────────────
+    const makesLabel      = document.getElementById('makes-label');
+    const totalLabel      = document.getElementById('total-label');
+    const pctLabel        = document.getElementById('pct-label');
+    const eventLabel      = document.getElementById('event-label');
+    const connectBtn      = document.getElementById('connect-btn');
+    const clearBtn        = document.getElementById('clear-btn');
+    const bleStatus       = document.getElementById('ble-status');
+    const rssiLabel       = document.getElementById('rssi-label');
+    const pktRateLbl      = document.getElementById('pkt-rate');
+    const baselineValsLbl = document.getElementById('baseline-vals');
+    const calBarWrap      = document.getElementById('cal-bar-wrap');
+    const calBar          = document.getElementById('cal-bar');
+
+    // Device info
+    const diHw   = document.getElementById('di-hw');
+    const diFw   = document.getElementById('di-fw');
+    const diBatt = document.getElementById('di-batt');
+    const diTemp = document.getElementById('di-temp');
+
+    // Threshold inputs
+    const tImpact   = document.getElementById('t-impact');
+    const tTofHigh  = document.getElementById('t-tof-high');
+    const tTofLow   = document.getElementById('t-tof-low');
+    const tSr       = document.getElementById('t-sr');
+    const tMaxTime  = document.getElementById('t-max-time');
+    const tBlackout = document.getElementById('t-blackout');
+    const threshDefaultBtn = document.getElementById('thresh-default-btn');
+
+    // ── App state ─────────────────────────────────────────────────────────
+    let makes = 0, total = 0;
+    let pktCount = 0;
+    let flashTimer = null;
+    const FLASH_MS = 1500;
+
+    const parser     = new PacketParser();
+    const classifier = new ShotClassifier();
+
+    // ── Threshold config helpers ──────────────────────────────────────────
+    const DEFAULTS = new ThresholdConfig();
+
+    function loadThresholdInputs(cfg) {
+      tImpact.value   = cfg.IMPACT_ACCEL_THRESHOLD;
+      tTofHigh.value  = cfg.TOF_DISTANCE_THRESHOLD_HIGH;
+      tTofLow.value   = cfg.TOF_DISTANCE_THRESHOLD_LOW;
+      tSr.value       = cfg.TOF_SIGNAL_RATE_THRESHOLD;
+      tMaxTime.value  = cfg.MAX_TIME_AFTER_IMPACT;
+      tBlackout.value = cfg.BLACKOUT_WINDOW;
+    }
+
+    function applyThresholdInputs() {
+      const cfg = classifier.config;
+      cfg.IMPACT_ACCEL_THRESHOLD      = parseFloat(tImpact.value);
+      cfg.TOF_DISTANCE_THRESHOLD_HIGH = parseFloat(tTofHigh.value);
+      cfg.TOF_DISTANCE_THRESHOLD_LOW  = parseFloat(tTofLow.value);
+      cfg.TOF_SIGNAL_RATE_THRESHOLD   = parseFloat(tSr.value);
+      cfg.MAX_TIME_AFTER_IMPACT       = parseFloat(tMaxTime.value);
+      cfg.BLACKOUT_WINDOW             = parseFloat(tBlackout.value);
+    }
+
+    // Populate inputs with current classifier config on load
+    loadThresholdInputs(classifier.config);
+
+    // Apply immediately on any input change
+    [tImpact, tTofHigh, tTofLow, tSr, tMaxTime, tBlackout].forEach(el =>
+      el.addEventListener('change', applyThresholdInputs)
+    );
+
+    threshDefaultBtn.addEventListener('click', () => {
+      loadThresholdInputs(DEFAULTS);
+      applyThresholdInputs();
+    });
+
+    // ── BLE receiver ─────────────────────────────────────────────────────
+    const ble = new BLEReceiver(onPacket, onBleStatus);
+
+    function onBleStatus(state, detail) {
+      console.log(`BLE [${state}]`, detail ?? '');
+      switch (state) {
+        case 'scanning':
+        case 'connecting':
+          bleStatus.textContent = `BLE: ${detail}`;
+          bleStatus.style.color = '#f39c12';
+          setEvent('connecting…', '#f39c12');
+          break;
+        case 'connected':
+          bleStatus.textContent = 'BLE: connected';
+          bleStatus.style.color = '#2ecc71';
+          connectBtn.textContent = 'Disconnect';
+          connectBtn.classList.add('disconnect');
+          connectBtn.disabled = false;
+          // Reset classifier and parser so calibration runs fresh on every connection.
+          // Score (makes/total) is intentionally preserved in case of a brief drop/reconnect.
+          classifier.reset();
+          parser.reset();
+          setEvent('calibrating baseline…  0%', '#f39c12');
+          showCalBar(true);
+          startKeepAlive();
+          break;
+        case 'disconnected':
+          stopKeepAlive();
+          bleStatus.textContent = 'BLE: disconnected';
+          bleStatus.style.color = '#e74c3c';
+          connectBtn.textContent = 'Connect';
+          connectBtn.classList.remove('disconnect');
+          connectBtn.disabled = false;
+          baselineValsLbl.textContent = '';
+          // Keep RSSI visible but dimmed so signal quality is still readable
+          if (rssiLabel.dataset.rssi) {
+            rssiLabel.style.color = '#445566';
+            rssiLabel.textContent = `~${rssiLabel.dataset.rssi} dBm`;
+          }
+          if (total === 0) setEvent('tap Connect to start', getComputedStyle(document.documentElement).getPropertyValue('--idle'));
+          showCalBar(false);
+          break;
+        case 'error':
+          stopKeepAlive();
+          bleStatus.textContent = `BLE error: ${detail}`;
+          bleStatus.style.color = '#e74c3c';
+          rssiLabel.textContent = '';
+          connectBtn.disabled = false;
+          break;
+        case 'rssi': {
+          const rssi = detail;  // numeric dBm
+          const color = rssi >= -60 ? '#2ecc71'
+                      : rssi >= -75 ? '#f39c12'
+                      : '#e74c3c';
+          rssiLabel.style.color = color;
+          rssiLabel.textContent = `${rssi} dBm`;
+          rssiLabel.dataset.rssi = rssi;  // latch for disconnect display
+          break;
+        }
+        case 'cancelled':
+          connectBtn.disabled = false;
+          break;
+      }
+    }
+
+    // ── Packet handler ────────────────────────────────────────────────────
+    function onPacket(dataView) {
+      pktCount++;
+      const { batch, lostPackets, deviceInfo } = parser.parse(dataView);
+      if (lostPackets > 0) console.warn(`Packet loss: ${lostPackets}`);
+      if (deviceInfo) updateDeviceInfo(deviceInfo);
+      if (!batch) return;
+
+      const cal         = classifier.calibrator;
+      const wasComplete = cal.isComplete;
+
+      const newShots = classifier.processBatch(batch);
+
+      // Calibration progress
+      if (!wasComplete) {
+        if (cal.isComplete) {
+          onCalibrationDone();
+        } else {
+          onCalibrationProgress(cal.progress);
+        }
+      }
+
+      // Shots
+      for (const shot of newShots) {
+        onShot(shot);
+      }
+    }
+
+    // ── Calibration UI ────────────────────────────────────────────────────
+    function updateDeviceInfo({ hwVersion, fwVersion, battMv, tempC }) {
+      diHw.textContent = `v${hwVersion}`;
+      diFw.textContent = `v${fwVersion}`;
+      if (battMv === 0) {
+        diBatt.textContent = '–';
+        diBatt.style.color = '#445566';
+      } else {
+        const battV = (battMv / 1000).toFixed(2);
+        diBatt.textContent = `${battV} V`;
+        diBatt.style.color = battMv >= 3700 ? '#2ecc71' : battMv >= 3500 ? '#f39c12' : '#e74c3c';
+      }
+      const tempSign = tempC >= 0 ? '' : '−';
+      diTemp.textContent = `${tempSign}${Math.abs(tempC)}°C`;
+      diTemp.style.color = tempC > 70 ? '#e74c3c' : tempC > 55 ? '#f39c12' : '#667788';
+    }
+
+    function showCalBar(visible) {
+      calBarWrap.classList.toggle('visible', visible);
+      if (!visible) {
+        calBar.classList.remove('done');
+        calBar.style.width = '0%';
+      }
+    }
+
+    function onCalibrationProgress(progress) {
+      const pct = Math.round(progress * 100);
+      calBar.style.width = `${pct}%`;
+      setEvent(`calibrating baseline…  ${pct}%`, '#f39c12');
+    }
+
+    function onCalibrationDone() {
+      calBar.classList.add('done');
+      setEvent('baseline ready — detecting shots', '#2ecc71');
+      setTimeout(() => showCalBar(false), 800);
+
+      // Display baseline values inside the threshold panel
+      const cal = classifier.calibrator;
+      const fmt = v => v != null ? v.toFixed(2) : '—';
+      baselineValsLbl.textContent =
+        `Baseline — ` +
+        `AcX:${fmt(cal.accelX)}  AcY:${fmt(cal.accelY)}  AcZ:${fmt(cal.accelZ)} g  ·  ` +
+        `SR:${cal.signalRate != null ? cal.signalRate.toFixed(0) : '—'}`;
+    }
+
+    // ── Shot handler ──────────────────────────────────────────────────────
+    function onShot(shot) {
+      const isMake = shot.classification === 'MAKE';
+      const type   = shot.basket_type ?? '';
+
+      if (isMake) makes++;
+      total++;
+      refreshScore();
+
+      const scoreText = `${makes} out of ${total}`;
+      if (isMake) {
+        const banner = type ? `MAKE!  ${type}` : 'MAKE!';
+        setEvent(banner, '#2ecc71');
+        speak(type === 'SWISH' ? `Swish. ${scoreText}` : `Made. ${scoreText}`);
+        triggerPop(makesLabel);
+      } else {
+        setEvent('Miss', '#e74c3c');
+        speak(`Miss. ${scoreText}`);
+      }
+
+      if (flashTimer) clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => {
+        eventLabel.style.color = '#444455';
+      }, FLASH_MS);
+
+      console.log(`${shot.classification} (${type}) | ${makes}/${total}`);
+    }
+
+    // ── Score helpers ─────────────────────────────────────────────────────
+    function refreshScore() {
+      makesLabel.textContent = makes;
+      totalLabel.textContent = total;
+      pctLabel.textContent   = total ? `${Math.round(makes / total * 100)} %` : '— %';
+    }
+
+    function setEvent(text, color) {
+      eventLabel.textContent  = text;
+      eventLabel.style.color  = color;
+    }
+
+    function triggerPop(el) {
+      el.classList.remove('pop');
+      void el.offsetWidth;    // force reflow to restart animation
+      el.classList.add('pop');
+    }
+
+    // ── Wake lock + audio keepalive ──────────────────────────────────────
+    // Strategy: use an <audio> element with srcObject to register this page
+    // as an OS audio session (like a music app), which grants background audio
+    // privileges so speech synthesis keeps working when the screen goes dark.
+    // A near-silent oscillator (gain 0.001, ~60 dB below normal — inaudible)
+    // keeps the OS audio pipeline active without truly-silent buffers that
+    // browsers detect and suspend.  Wake lock prevents the screen dimming
+    // when available (requires HTTPS; silently ignored otherwise).
+    let _wakeLock    = null;
+    let _audioCtx    = null;  // created in Connect click (user-gesture required)
+    let _keepAliveEl = null;  // <audio> element — registers the OS audio session
+
+    function _requestWakeLock() {
+      if ('wakeLock' in navigator) {
+        navigator.wakeLock.request('screen')
+          .then(lock => {
+            _wakeLock = lock;
+            _wakeLock.addEventListener('release', () => { _wakeLock = null; });
+          })
+          .catch(() => {});
+      }
+    }
+
+    function startKeepAlive() {
+      _requestWakeLock();
+      if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume();
+    }
+
+    function stopKeepAlive() {
+      if (_wakeLock) { _wakeLock.release().catch(() => {}); _wakeLock = null; }
+      // Keep _audioCtx + _keepAliveEl running — stopping requires another
+      // user gesture to restart; negligible battery cost at gain 0.001.
+    }
+
+    // Re-acquire wake lock and resume AudioContext when user returns to tab
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume();
+      if (ble.connected) _requestWakeLock();
+    });
+
+    // ── Speech synthesis ──────────────────────────────────────────────────
+    function speak(text) {
+      if (!window.speechSynthesis) return;
+      window.speechSynthesis.cancel();
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = 1.1;
+      window.speechSynthesis.speak(utt);
+    }
+
+    // ── Packet-rate ticker ────────────────────────────────────────────────
+    setInterval(() => {
+      const rate  = pktCount;
+      pktCount    = 0;
+      if (!ble.connected) { pktRateLbl.textContent = ''; return; }
+      const color = rate === 0 ? '#e74c3c' : rate < 7 ? '#e67e22' : '#555566';
+      pktRateLbl.style.color  = color;
+      pktRateLbl.textContent  = rate === 0 ? '0 pkt/s ⚠' : `${rate} pkt/s`;
+    }, 1000);
+
+    // ── Button handlers ───────────────────────────────────────────────────
+    connectBtn.addEventListener('click', async () => {
+      // Unlock speech synthesis AND create AudioContext within this user
+      // gesture so mobile browsers allow later async calls (BLE callbacks).
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+      }
+      if (!_audioCtx || _audioCtx.state === 'closed') {
+        _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        // Route a near-silent oscillator to a MediaStreamDestination so the
+        // <audio> element below can register an OS audio session, giving this
+        // page background-audio privileges (same as a music/podcast app).
+        const dest = _audioCtx.createMediaStreamDestination();
+        const osc  = _audioCtx.createOscillator();
+        const gain = _audioCtx.createGain();
+        gain.gain.value = 0.001;          // ~60 dB below audible — inaudible
+        osc.connect(gain);
+        gain.connect(dest);               // → <audio> srcObject (OS session)
+        gain.connect(_audioCtx.destination); // → speakers (speechSynthesis)
+        osc.start();
+        _keepAliveEl = new Audio();
+        _keepAliveEl.srcObject = dest.stream;
+        _keepAliveEl.play().catch(() => {});
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.metadata =
+            new MediaMetadata({ title: 'Basketball Score 🏀', artist: 'Live' });
+        }
+      }
+      if (ble.connected) {
+        ble.disconnect();
+        return;
+      }
+      connectBtn.disabled = true;
+      try {
+        await ble.connect();
+      } catch (_) {
+        // onBleStatus handles UI reset
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      classifier.reset();
+      parser.reset();
+      makes = 0;
+      total = 0;
+      if (flashTimer) clearTimeout(flashTimer);
+      refreshScore();
+      baselineValsLbl.textContent = '';
+      if (ble.connected) {
+        setEvent('cleared — recalibrating baseline…', '#f39c12');
+        showCalBar(true);
+        calBar.classList.remove('done');
+        calBar.style.width = '0%';
+      } else {
+        setEvent('tap Connect to start', '#444455');
+      }
+      console.log('Score cleared.');
+    });
+  </script>
+</body>
+</html>

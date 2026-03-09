@@ -1,0 +1,144 @@
+/**
+ * db.js
+ * Firestore + Firebase Storage operations.
+ *
+ * Collections:
+ *   /users/{uid}/sessions/{sessionId}   — session summary document
+ *   /shots/{shotId}                     — individual shot records (global, filtered by userId)
+ *
+ * Storage:
+ *   clips/{uid}/{sessionId}/{shotIndex}.webm   — 2-second video clips
+ */
+
+import {
+  collection,
+  addDoc,
+  setDoc,
+  doc,
+  query,
+  where,
+  orderBy,
+  limit,
+  getDocs,
+  Timestamp,
+} from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js';
+
+import {
+  ref,
+  uploadBytes,
+  getDownloadURL,
+} from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-storage.js';
+
+import { db, storage } from './firebase.js';
+
+// ── Video clip upload ────────────────────────────────────────────────────────
+
+/**
+ * Upload a video clip Blob to Firebase Storage.
+ * @param {string}  uid         Firebase Auth user UID
+ * @param {string}  sessionId   Session identifier (e.g. "20260308_143022")
+ * @param {number}  shotIndex   Index of the shot within the session
+ * @param {Blob}    blob        WebM video blob
+ * @param {string}  mimeType    e.g. "video/webm;codecs=vp8"
+ * @returns {Promise<string>}   Public download URL
+ */
+export async function uploadClip(uid, sessionId, shotIndex, blob, mimeType) {
+  const path    = `clips/${uid}/${sessionId}/${shotIndex}.webm`;
+  const storRef = ref(storage, path);
+  const meta    = { contentType: mimeType || 'video/webm' };
+  await uploadBytes(storRef, blob, meta);
+  return getDownloadURL(storRef);
+}
+
+// ── Shot document ────────────────────────────────────────────────────────────
+
+/**
+ * Save a single shot (with optional video URL) to Firestore.
+ *
+ * @param {{
+ *   userId:            string,
+ *   sessionId:         string,
+ *   timestamp:         number,     // Unix epoch ms
+ *   ai_prediction:     string,     // 'MAKE' | 'MISS'
+ *   basket_type:       string|null, // 'SWISH' | 'BANK' | null
+ *   user_label:        string,     // final verified label (e.g. "SWISH", "MISS", "FALSE_ALARM")
+ *   confidence:        number,
+ *   sensor_mpu:        number[],   // flattened [ax,ay,az, gx,gy,gz, ...] per sample
+ *   sensor_tof:        number[],   // [distance, ...] per sample
+ *   video_url:         string|null,
+ * }} shot
+ */
+export async function saveShot(shot) {
+  const shotsRef = collection(db, 'shots');
+  const docRef   = await addDoc(shotsRef, {
+    ...shot,
+    createdAt: Timestamp.fromMillis(shot.timestamp),
+  });
+  return docRef.id;
+}
+
+// ── Session document ─────────────────────────────────────────────────────────
+
+/**
+ * Save a practice session summary.
+ * @param {string} uid
+ * @param {string} sessionId
+ * @param {{makes: number, total: number, durationSec: number, shotIds: string[]}} summary
+ */
+export async function saveSession(uid, sessionId, summary) {
+  const sessionRef = doc(db, 'users', uid, 'sessions', sessionId);
+  await setDoc(sessionRef, {
+    ...summary,
+    userId:    uid,
+    sessionId,
+    accuracy:  summary.total > 0 ? Math.round(summary.makes / summary.total * 100) : 0,
+    createdAt: Timestamp.now(),
+  });
+}
+
+// ── Queries ──────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch recent sessions for a user, newest first.
+ * @param {string} uid
+ * @param {number} [maxSessions=20]
+ * @returns {Promise<Array>}
+ */
+export async function fetchSessions(uid, maxSessions = 20) {
+  const sessRef = collection(db, 'users', uid, 'sessions');
+  const q       = query(sessRef, orderBy('createdAt', 'desc'), limit(maxSessions));
+  const snap    = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+/**
+ * Fetch shots for a specific session.
+ * @param {string} uid
+ * @param {string} sessionId
+ * @returns {Promise<Array>}
+ */
+export async function fetchSessionShots(uid, sessionId) {
+  const q    = query(
+    collection(db, 'shots'),
+    where('userId',    '==', uid),
+    where('sessionId', '==', sessionId),
+    orderBy('timestamp', 'asc'),
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+/**
+ * Fetch all shots for lifetime stats.
+ * @param {string} uid
+ * @returns {Promise<Array>}
+ */
+export async function fetchAllShots(uid) {
+  const q    = query(
+    collection(db, 'shots'),
+    where('userId', '==', uid),
+    orderBy('timestamp', 'asc'),
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
