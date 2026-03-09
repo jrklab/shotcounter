@@ -73,6 +73,7 @@ let recordingStartMs   = 0;     // performance.now() when recording started
 let videoSessionBlob   = null;  // assembled full-session video Blob
 let videoSessionUrl    = null;  // object URL for the review video element
 let uploadVideoEnabled = true;  // upload full session video to Firebase Storage
+let _clipStopListener  = null;  // active timeupdate listener for clip-end pause
 
 // BLE / device state
 let isBleConnected = false;
@@ -705,12 +706,31 @@ function renderReviewCard() {
     predEl.style.color  = isMake ? '#2ecc71' : '#e74c3c';
   }
 
-  // Video clip — seek the persistent full-session video to this event's timestamp
+  // Video clip — seek the full-session video to this event and play only the
+  // 3.5 s window (EVENT_PRE_MS before → EVENT_POST_MS after the event).
   const videoEl = document.getElementById('review-video');
   if (videoEl && videoSessionUrl) {
-    // Seek to EVENT_PRE_MS before the event so user sees the run-up
-    const seekSec = Math.max(0, (event.hostEventTs - EVENT_PRE_MS) / 1000);
-    // If the video is already loaded, just seek; otherwise wait for loadedmetadata
+    const clipDuration = (EVENT_PRE_MS + EVENT_POST_MS) / 1000;   // 3.5 s
+    const seekSec  = Math.max(0, (event.hostEventTs - EVENT_PRE_MS) / 1000);
+    const endSec   = seekSec + clipDuration;
+
+    // Remove any previous clip-end listener from the last card.
+    if (_clipStopListener) {
+      videoEl.removeEventListener('timeupdate', _clipStopListener);
+      _clipStopListener = null;
+    }
+
+    // Install a new listener that pauses as soon as the clip window ends.
+    _clipStopListener = () => {
+      if (videoEl.currentTime >= endSec) {
+        videoEl.pause();
+        // Remove self — don't keep firing after pause.
+        videoEl.removeEventListener('timeupdate', _clipStopListener);
+        _clipStopListener = null;
+      }
+    };
+    videoEl.addEventListener('timeupdate', _clipStopListener);
+
     const doSeek = () => {
       videoEl.currentTime = seekSec;
       videoEl.play().catch(() => {});
