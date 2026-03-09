@@ -178,6 +178,22 @@
     }
     .setup-note { font-size: 0.78rem; color: var(--muted); text-align: center; padding: 0 12px; }
 
+    /* Toggle switch */
+    .toggle-switch { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: #1e2736; border-radius: 26px; cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle-track::before {
+      content: ''; position: absolute;
+      width: 20px; height: 20px; left: 3px; bottom: 3px;
+      background: #667; border-radius: 50%; transition: transform 0.2s, background 0.2s;
+    }
+    .toggle-switch input:checked + .toggle-track { background: #1f618d; }
+    .toggle-switch input:checked + .toggle-track::before { transform: translateX(20px); background: var(--make); }
+
     /* ══ PRACTICE ACTIVE ══════════════════════════════════════════════ */
     #screen-practice-active { padding: 0; overflow: hidden; background: #000; }
 
@@ -404,11 +420,11 @@
         <button id="setup-ble-btn" class="btn btn-blue btn-sm">Connect</button>
       </div>
 
-      <!-- Camera (optional) -->
+      <!-- Camera (required) -->
       <div class="setup-row">
         <span class="setup-icon">📷</span>
         <div class="setup-info">
-          <div class="setup-label">Camera (optional)</div>
+          <div class="setup-label">Camera</div>
           <div id="setup-cam-state" class="setup-state">⭕ Not enabled</div>
         </div>
         <button id="setup-cam-btn" class="btn btn-dark btn-sm">Enable</button>
@@ -416,9 +432,22 @@
 
       <video id="setup-cam-preview" autoplay muted playsinline></video>
 
+      <!-- Upload video toggle -->
+      <div class="setup-row">
+        <span class="setup-icon">☁️</span>
+        <div class="setup-info">
+          <div class="setup-label">Upload Video Clips</div>
+          <div class="setup-state">Upload clips to Firebase for review</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="setup-upload-video-toggle" checked />
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+
       <p class="setup-note">
-        Camera is optional — video clips help you review and label shots.<br>
-        BLE sensor is required to detect shots.
+        Both BLE sensor and camera are required to start a session.<br>
+        Video clips capture the 1.5 s before and 2 s after each shot.
       </p>
 
       <div style="flex:1"></div>
