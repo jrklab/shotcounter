@@ -21,13 +21,16 @@ import { BLEReceiver }                             from './ble.js';
 import { PacketParser }                            from './parser.js';
 import { ShotClassifier, ThresholdConfig }         from './classifier.js';
 import { OtaUpdater }                              from './ota-ble.js';
-import { uploadClip, saveShot, saveSession,
+import { saveShot, saveSession,
          fetchSessions, fetchAllShots,
-         uploadSessionCsv }                        from './db.js';
+         uploadSessionCsv, uploadSessionJson,
+         uploadSessionVideo }                        from './db.js';
+import { storeSessionVideo, loadSessionVideo,
+         deleteSessionVideo }                        from './video-store.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const VIDEO_TIMESLICE_MS  = 500;   // chunk interval for MediaRecorder
-const VIDEO_BUFFER_CHUNKS = 40;    // rolling buffer: ~20 s of video
+const VIDEO_TIMESLICE_MS  = 200;   // chunk interval — short for frequent keyframes (seekable)
+const VIDEO_BITRATE       = 500_000; // 500 kbps — reduced for phone storage
 const SENSOR_WINDOW_SLOTS = 400;   // max samples in rolling sensor window (~2 s @ 200 Hz)
 const EVENT_PRE_MS        = 1500;  // video/review window: ms before basket event
 const EVENT_POST_MS       = 2000;  // video/review window: ms after basket event
@@ -52,24 +55,24 @@ let sessionEnd     = null;  // performance.now() ms when practice stops
 let sessionMakes   = 0;
 let sessionTotal   = 0;
 
-/** @type {{ shot: Object, clipBlob: Blob|null, mimeType: string, label: string }[]} */
+/** @type {{ shot: Object, label: string, timestamp: number, host_ts: number, hostEventTs: number }[]} */
 let sessionEvents  = [];
 let reviewIndex    = 0;
 
-// Sensor data rolling window (for per-shot snapshot) + full-session log for CSV
+// Sensor data rolling window + full-session log for CSV
 let sensorWindow   = [];    // rolling ~2 s window  [{accel, gyro, distance, mpu_ts, tof_ts}]
 let allSensorData  = [];    // full session sensor log (for CSV export)
 
 // Video recording state
-let mediaStream       = null;
-let mediaRecorder     = null;
-let videoChunks       = [];    // rolling [{data: Blob, startMs: number, endMs: number}]
-let videoInitSegment  = null;  // first MediaRecorder chunk (WebM init/codec headers)
-let videoMimeType     = 'video/webm';
-let videoEnabled      = false;
-let recordingStartMs  = 0;     // absolute performance.now() when recording began
-let recordingChunkSeq = 0;     // incrementing chunk counter for timestamp calc
-let uploadVideoEnabled = true; // upload video clips to Firebase Storage
+let mediaStream        = null;
+let mediaRecorder      = null;
+let allVideoChunks     = [];    // ALL recorded chunks — no eviction (stored to IndexedDB at end)
+let videoMimeType      = 'video/webm';
+let videoEnabled       = false;
+let recordingStartMs   = 0;     // performance.now() when recording started
+let videoSessionBlob   = null;  // assembled full-session video Blob
+let videoSessionUrl    = null;  // object URL for the review video element
+let uploadVideoEnabled = true;  // upload full session video to Firebase Storage
 
 // BLE / device state
 let isBleConnected = false;
@@ -293,7 +296,8 @@ function wirePracticeSetup() {
     }
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        // 640×480 portrait: good enough to see a shot, much smaller file than 1080p
+        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
         audio: false,
       });
       videoEnabled = true;
@@ -361,8 +365,10 @@ function startPracticeSession() {
   sessionEvents = [];
   sensorWindow  = [];
   allSensorData = [];
-  videoChunks   = [];
-  recordingChunkSeq = 0;
+  allVideoChunks = [];
+  videoSessionBlob = null;
+  // Release previous session object URL if any
+  if (videoSessionUrl) { URL.revokeObjectURL(videoSessionUrl); videoSessionUrl = null; }
 
   // Reset classifier and parser for fresh calibration
   classifier = new ShotClassifier();
@@ -391,27 +397,46 @@ function startPracticeSession() {
 
 function stopPracticeSession() {
   sessionEnd = performance.now();
-  stopVideoRecording();
 
   // Disconnect BLE — sensor no longer needed
   if (isBleConnected) ble.disconnect();
 
   if (sessionEvents.length === 0) {
-    // No events — skip review, go home
+    stopCamera();
     showToast('Session ended with no detected shots.', 'info');
     showScreen('dashboard');
     return;
   }
 
-  // Wait for deferred video clip timers (EVENT_POST_MS + 2 chunks) to fire
-  // before switching to review, so all clipBlobs are populated.
-  setActiveEvent('Finalizing clips…', '#f39c12');
-  const CLIP_WAIT_MS = EVENT_POST_MS + VIDEO_TIMESLICE_MS * 2 + 200;
-  setTimeout(() => {
+  setActiveEvent('Saving session video…', '#f39c12');
+
+  // Wait for MediaRecorder to flush its final chunk via the 'stop' event,
+  // then assemble the full blob and persist it to IndexedDB.
+  const finalizeAndReview = async () => {
+    stopCamera();  // release camera tracks now that recording is finished
+
+    if (allVideoChunks.length > 0) {
+      videoSessionBlob = new Blob(allVideoChunks.map(c => c.data),
+                                  { type: videoMimeType || 'video/webm' });
+      try {
+        await storeSessionVideo(sessionId, videoSessionBlob);
+      } catch (e) {
+        console.warn('IndexedDB store failed — video lives in RAM only:', e);
+      }
+    }
+
     reviewIndex = 0;
-    showScreen('practice-review');
-    renderReviewCard();
-  }, CLIP_WAIT_MS);
+    await showReviewScreen();
+  };
+
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.addEventListener('stop', finalizeAndReview, { once: true });
+    mediaRecorder.stop();
+    mediaRecorder = null;
+  } else {
+    mediaRecorder = null;
+    finalizeAndReview();
+  }
 }
 
 // ── Scoreboard helpers ───────────────────────────────────────────────────────
@@ -446,39 +471,28 @@ function updateCalBar(pct) {
 
 function startVideoRecording() {
   const mimeOptions = [
+    'video/webm;codecs=vp8',  // VP8 preferred: better Android seek support than VP9
     'video/webm;codecs=vp9',
-    'video/webm;codecs=vp8',
     'video/webm',
     'video/mp4',
   ];
-  videoMimeType     = mimeOptions.find(m => MediaRecorder.isTypeSupported(m)) ?? '';
-  videoChunks       = [];
-  videoInitSegment  = null;
-  recordingChunkSeq = 0;
-  recordingStartMs  = performance.now();
+  videoMimeType    = mimeOptions.find(m => MediaRecorder.isTypeSupported(m)) ?? '';
+  allVideoChunks   = [];
+  recordingStartMs = performance.now();
 
   try {
     mediaRecorder = new MediaRecorder(mediaStream, {
       mimeType:           videoMimeType,
-      videoBitsPerSecond: 1_200_000,
+      videoBitsPerSecond: VIDEO_BITRATE,
     });
     mediaRecorder.addEventListener('dataavailable', (evt) => {
       if (evt.data.size > 0) {
-        const startMs = recordingChunkSeq * VIDEO_TIMESLICE_MS;
-        const endMs   = startMs + VIDEO_TIMESLICE_MS;
-        // Save the very first chunk as the WebM init/codec segment.
-        // It must be prepended to every extracted clip for the video to be
-        // decodable (especially on Android where keyframe-less WebM fails).
-        if (recordingChunkSeq === 0) {
-          videoInitSegment = evt.data;
-        }
-        recordingChunkSeq++;
-        videoChunks.push({ data: evt.data, startMs, endMs });
-        if (videoChunks.length > VIDEO_BUFFER_CHUNKS) {
-          videoChunks.shift();   // drop oldest chunk
-        }
+        // Record-relative start time of this chunk (used for hostEventTs seeking)
+        const startMs = allVideoChunks.length * VIDEO_TIMESLICE_MS;
+        allVideoChunks.push({ data: evt.data, startMs });
       }
     });
+    // Short timeslice → more frequent keyframes → accurate seeks during review
     mediaRecorder.start(VIDEO_TIMESLICE_MS);
   } catch (e) {
     console.warn('MediaRecorder failed:', e);
@@ -486,50 +500,16 @@ function startVideoRecording() {
   }
 }
 
-function stopVideoRecording() {
+function stopCamera() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
   }
   mediaRecorder = null;
-}
-
-function stopCamera() {
-  stopVideoRecording();
   if (mediaStream) {
     mediaStream.getTracks().forEach(t => t.stop());
     mediaStream  = null;
     videoEnabled = false;
   }
-}
-
-/**
- * Extract a video clip Blob for an event at the given recording-relative timestamp.
- * Uses the timestamp-indexed videoChunks array so the window is accurate.
- * Immediately captures the pre-window; post-window is captured after EVENT_POST_MS.
- * The returned object is mutated asynchronously (clipBlob is set after timeout).
- *
- * @param {Object} evObj   — the event object to fill `.clipBlob` into
- */
-function scheduleClipExtraction(evObj) {
-  if (!videoEnabled || videoChunks.length === 0) return;
-  const eventTs   = performance.now() - recordingStartMs;
-  // Snapshot pre-window chunks immediately (they may be evicted later)
-  const preChunks = videoChunks.filter(c => c.endMs >= eventTs - EVENT_PRE_MS && c.startMs <= eventTs + VIDEO_TIMESLICE_MS);
-
-  setTimeout(() => {
-    const postChunks = videoChunks.filter(c => c.startMs > eventTs && c.startMs <= eventTs + EVENT_POST_MS);
-    const combined   = [...preChunks, ...postChunks].sort((a, b) => a.startMs - b.startMs);
-    if (combined.length > 0) {
-      // Always prepend the WebM initialization segment (first recorded chunk) so
-      // the browser can decode the clip even when chunk 0 has been evicted from
-      // the rolling buffer.  Avoid duplicating it if it's already the first chunk.
-      const firstChunkStartMs = combined[0].startMs;
-      const blobParts = (videoInitSegment && firstChunkStartMs > 0)
-        ? [videoInitSegment, ...combined.map(c => c.data)]
-        : combined.map(c => c.data);
-      evObj.clipBlob = new Blob(blobParts, { type: videoMimeType || 'video/webm' });
-    }
-  }, EVENT_POST_MS + VIDEO_TIMESLICE_MS * 2);
 }
 
 // ── Sensor window ────────────────────────────────────────────────────────────
@@ -553,6 +533,14 @@ function onBlePacket(dataView) {
   }
 
   if (!batch || activeScreen !== 'practice-active') return;
+
+  // Capture the host (browser) time when this BLE packet was received.
+  // All samples in this packet share the same host timestamp.
+  const hostNow = performance.now();
+  batch.forEach(s => { s.host_ts = hostNow; });
+
+  // The last sample's device timestamp is the latest device time in the packet.
+  const latestDeviceTs_ms = batch[batch.length - 1].mpu_ts;
 
   // Rolling sensor window (for per-shot snapshot)
   sensorWindow.push(...batch);
@@ -578,13 +566,13 @@ function onBlePacket(dataView) {
     }
   }
 
-  // New shot events
+  // New shot events — pass host timing context so clip extraction is accurate
   for (const shot of newShots) {
-    onShotDetected(shot);
+    onShotDetected(shot, hostNow, latestDeviceTs_ms);
   }
 }
 
-function onShotDetected(shot) {
+function onShotDetected(shot, hostNow = performance.now(), latestDeviceTs_ms = null) {
   const isMake = shot.classification === 'MAKE';
   const type   = shot.basket_type ?? '';
 
@@ -592,23 +580,25 @@ function onShotDetected(shot) {
   sessionTotal++;
   updateActiveScoreboard();
 
-  const sensorSnap = snapshotSensorWindow();
+  // Compute the recording-relative host time of the actual basket/impact event.
+  // The classifier assigns a device timestamp (seconds); compare to the latest
+  // device timestamp in this packet to get how far back the event was, then
+  // subtract that lag from the host receive time.
+  const eventDeviceTs_ms = (shot.basket_time ?? shot.impact_time ?? 0) * 1000;
+  const deviceLag_ms     = latestDeviceTs_ms !== null
+    ? Math.max(0, latestDeviceTs_ms - eventDeviceTs_ms)
+    : 0;
+  const hostEventTs = (hostNow - recordingStartMs) - deviceLag_ms;
 
   const ev = {
     shot,
-    clipBlob:  null,   // filled asynchronously by scheduleClipExtraction
-    mimeType:  videoMimeType,
-    label:     isMake ? (type || 'MAKE') : 'MISS',  // default = AI prediction
-    sensorSnap,
-    timestamp: Date.now(),
+    label:      isMake ? (type || 'MAKE') : 'MISS',  // default = AI prediction
+    timestamp:  Date.now(),
+    host_ts:    hostNow,       // performance.now() when BLE packet was received
+    hostEventTs,               // recording-relative ms of the event — used for video seek
   };
 
   sessionEvents.push(ev);
-
-  // Schedule timestamp-accurate clip capture (pre + post window)
-  if (videoEnabled) {
-    scheduleClipExtraction(ev);
-  }
 
   if (isMake) {
     setActiveEvent(type === 'SWISH' ? '🏀 SWISH!' : '🏀 Made!', '#2ecc71');
@@ -654,6 +644,39 @@ function updateDeviceInfoBar(info) {
 // REVIEW & LABEL screen
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Enter the review screen and attach the full-session video.
+ * Loads the blob from IndexedDB (or falls back to in-RAM blob) and sets
+ * it as the video element src once — individual cards just seek.
+ */
+async function showReviewScreen() {
+  showScreen('practice-review');
+
+  const videoEl = document.getElementById('review-video');
+  if (!videoEl) { renderReviewCard(); return; }
+
+  // Try IndexedDB first, fall back to in-RAM blob
+  let blob = null;
+  try {
+    blob = await loadSessionVideo(sessionId);
+  } catch (e) {
+    console.warn('IndexedDB load failed:', e);
+  }
+  blob = blob ?? videoSessionBlob;
+
+  if (blob) {
+    if (videoSessionUrl) URL.revokeObjectURL(videoSessionUrl);
+    videoSessionUrl    = URL.createObjectURL(blob);
+    videoEl.src        = videoSessionUrl;
+    videoEl.load();
+    videoEl.style.display = '';
+  } else {
+    videoEl.style.display = 'none';
+  }
+
+  renderReviewCard();
+}
+
 function wireReviewScreen() {
   document.getElementById('review-skip-btn')?.addEventListener('click', () => {
     reviewIndex++;
@@ -682,16 +705,20 @@ function renderReviewCard() {
     predEl.style.color  = isMake ? '#2ecc71' : '#e74c3c';
   }
 
-  // Video clip
+  // Video clip — seek the persistent full-session video to this event's timestamp
   const videoEl = document.getElementById('review-video');
-  if (videoEl) {
-    if (event.clipBlob) {
-      videoEl.src   = URL.createObjectURL(event.clipBlob);
-      videoEl.style.display = '';
-      videoEl.load();
+  if (videoEl && videoSessionUrl) {
+    // Seek to EVENT_PRE_MS before the event so user sees the run-up
+    const seekSec = Math.max(0, (event.hostEventTs - EVENT_PRE_MS) / 1000);
+    // If the video is already loaded, just seek; otherwise wait for loadedmetadata
+    const doSeek = () => {
+      videoEl.currentTime = seekSec;
       videoEl.play().catch(() => {});
+    };
+    if (videoEl.readyState >= 1) {   // HAVE_METADATA
+      doSeek();
     } else {
-      videoEl.style.display = 'none';
+      videoEl.addEventListener('loadedmetadata', doSeek, { once: true });
     }
   }
 
@@ -742,9 +769,9 @@ async function startUpload() {
   const uid = user?.uid;
   if (!uid) { showScreen('dashboard'); return; }
 
-  // Steps: 1 CSV + N shots (+ optional N clips)
-  const clipSteps   = uploadVideoEnabled ? sessionEvents.length : 0;
-  const totalSteps  = 1 + sessionEvents.length + clipSteps;
+  // Steps: 1 CSV + 1 JSON + N shots + optional 1 session video
+  const videoSteps  = uploadVideoEnabled ? 1 : 0;
+  const totalSteps  = 2 + sessionEvents.length + videoSteps;
   let   doneSteps   = 0;
   const shotIds     = [];
 
@@ -769,24 +796,20 @@ async function startUpload() {
   doneSteps++;
   updateBar();
 
-  // ── 2. Upload per-shot clips + save shot documents ────────────────────────
+  // ── 1b. Upload session labels JSON ───────────────────────────────────────
+  try {
+    setStatus('Uploading session labels JSON…');
+    const jsonBlob = generateSessionJson();
+    await uploadSessionJson(uid, sessionId, jsonBlob);
+  } catch (e) {
+    console.warn('Labels JSON upload failed:', e);
+  }
+  doneSteps++;
+  updateBar();
+
+  // ── 2. Save shot documents (no per-shot video — session video uploaded separately) ──
   for (let i = 0; i < sessionEvents.length; i++) {
-    const ev  = sessionEvents[i];
-    let videoUrl = null;
-
-    // Upload video clip (if enabled and available)
-    if (uploadVideoEnabled && ev.clipBlob) {
-      try {
-        setStatus(`Uploading clip ${i + 1} / ${sessionEvents.length}…`);
-        videoUrl = await uploadClip(uid, sessionId, i, ev.clipBlob, ev.mimeType);
-      } catch (e) {
-        console.warn('Clip upload failed:', e);
-      }
-      doneSteps++;
-      updateBar();
-    }
-
-    // Save shot document
+    const ev = sessionEvents[i];
     try {
       setStatus(`Saving shot ${i + 1} / ${sessionEvents.length}…`);
       const id = await saveShot({
@@ -797,16 +820,14 @@ async function startUpload() {
         basket_type:   ev.shot.basket_type ?? null,
         user_label:    ev.label,
         confidence:    ev.shot.confidence ?? 0,
-        video_url:     videoUrl,
+        host_event_ts: ev.hostEventTs,   // recording-relative ms — for offline seek
       });
       shotIds.push(id);
     } catch (e) {
       console.warn('Shot save failed:', e);
     }
-
     doneSteps++;
     updateBar();
-    setStatus(`Saved shot ${doneSteps} / ${sessionEvents.length}`);
   }
 
   // ── 3. Save session summary ───────────────────────────────────────────────
@@ -814,8 +835,23 @@ async function startUpload() {
   const total  = sessionEvents.filter(e => e.label !== 'FALSE_ALARM').length;
   const durSec = Math.round(((sessionEnd ?? performance.now()) - sessionStart) / 1000);
 
+  // ── 3b. Upload full session video (if enabled) ────────────────────────────
+  let sessionVideoUrl = null;
+  if (uploadVideoEnabled && videoSessionBlob) {
+    try {
+      setStatus('Uploading session video…');
+      sessionVideoUrl = await uploadSessionVideo(uid, sessionId, videoSessionBlob, videoMimeType);
+      // Clean up IndexedDB now that video is safely in the cloud
+      deleteSessionVideo(sessionId).catch(() => {});
+    } catch (e) {
+      console.warn('Session video upload failed:', e);
+    }
+    doneSteps++;
+    updateBar();
+  }
+
   try {
-    await saveSession(uid, sessionId, { makes, total, durationSec: durSec, shotIds });
+    await saveSession(uid, sessionId, { makes, total, durationSec: durSec, shotIds, video_url: sessionVideoUrl });
   } catch (e) {
     console.warn('Session save failed:', e);
   }
@@ -850,12 +886,14 @@ async function startUpload() {
  */
 function generateSessionCsv() {
   const header = [
+    'Host_Timestamp (ms)',
     'MPU_Timestamp (ms)', 'AcX (g)', 'AcY (g)', 'AcZ (g)',
     'GyX (dps)', 'GyY (dps)', 'GyZ (dps)',
     'TOF_Timestamp (ms)', 'Range (mm)', 'Signal_Rate',
   ].join(',');
 
   const rows = allSensorData.map(s => [
+    (s.host_ts  ?? 0).toFixed(3),   // host receive time (performance.now() ms)
     s.mpu_ts ?? 0,
     (s.accel[0] ?? 0).toFixed(6),
     (s.accel[1] ?? 0).toFixed(6),
@@ -870,6 +908,43 @@ function generateSessionCsv() {
 
   const csvString = [header, ...rows].join('\n');
   return new Blob([csvString], { type: 'text/csv' });
+}
+
+/**
+ * Generate a session_labels.json Blob matching the triage_labels.py format:
+ *   { "<idx>": { top, subtype, source, event_ts_s, event_type, host_ts_udp } }
+ *
+ * - generated AFTER shot review so user labels are final
+ * - host_ts_udp is in seconds (performance.now() / 1000) to match Python convention
+ */
+function generateSessionJson() {
+  const output = {};
+  sessionEvents.forEach((ev, idx) => {
+    const shot   = ev.shot;
+    const isMake = shot.classification === 'MAKE';
+    const label  = ev.label;
+
+    let top, subtype;
+    if (label === 'FALSE_ALARM')    { top = 'NOT_SHOT'; subtype = null; }
+    else if (label === 'MISS')      { top = 'MISS';     subtype = null; }
+    else if (label === 'SWISH')     { top = 'MAKE';     subtype = 'SWISH'; }
+    else if (label === 'RIM_IN')    { top = 'MAKE';     subtype = 'RIM_IN'; }
+    else                            { top = 'MAKE';     subtype = label ?? null; }
+
+    // Determine whether the user changed the AI prediction
+    const aiLabel = isMake ? (shot.basket_type || 'MAKE') : 'MISS';
+    const source  = (label === aiLabel) ? 'auto' : 'manual';
+
+    output[idx] = {
+      top,
+      subtype,
+      source,
+      event_ts_s:  shot.basket_time ?? shot.impact_time ?? 0,
+      event_type:  isMake ? 'basket' : 'impact',
+      host_ts_udp: (ev.host_ts ?? 0) / 1000.0,   // seconds, matches Python convention
+    };
+  });
+  return new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
