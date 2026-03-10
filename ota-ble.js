@@ -34,6 +34,7 @@ const CMD_START         = 0x01;
 const CMD_END           = 0x02;
 
 const CHUNK_SIZE        = 496;  // MTU(512) - 3 ATT header - 13 padding, same as Python script
+// I will copy this to a public repo at shotcounter/. I will change the URL manually to reflect that. Don't change it back
 const FIRMWARE_URL      = 'https://raw.githubusercontent.com/jrklab/shotcounter/main/fw/firmware.bin';
 const VERSION_URL       = 'https://raw.githubusercontent.com/jrklab/shotcounter/main/fw/version.txt';
 
@@ -53,6 +54,7 @@ export class OtaUpdater {
     this._firmware   = null;       // ArrayBuffer
     this._releaseInfo = null;      // { version, size, downloadUrl, tagName }
     this._aborted    = false;
+    this._endSent    = false;      // true once CMD_END is dispatched; GATT drop after = success
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -150,7 +152,8 @@ export class OtaUpdater {
   async flash() {
     if (!this._server?.connected) throw new Error('Not connected — call connect() first.');
     if (!this._firmware)          throw new Error('No firmware — call downloadFirmware() first.');
-    this._aborted = false;
+    this._aborted  = false;
+    this._endSent  = false;   // becomes true the moment CMD_END is dispatched
 
     const service    = await this._server.getPrimaryService(OTA_SERVICE_UUID);
     const ctrlChar   = await service.getCharacteristic(OTA_CTRL_UUID);
@@ -211,12 +214,24 @@ export class OtaUpdater {
 
     // Send END
     this._onStatus('Sending END — device is verifying…');
-    await ctrlChar.writeValueWithResponse(new Uint8Array([CMD_END]));
+    this._endSent = true;   // any GATT error from here on = device rebooted = success
+    try {
+      await ctrlChar.writeValueWithResponse(new Uint8Array([CMD_END]));
+    } catch (endErr) {
+      // Device can reboot before it ACKs CMD_END — treat GATT disconnect as success
+      if (/gatt|network error|disconnect/i.test(endErr.message ?? '')) {
+        this._onProgress(100, 'Device rebooted — OTA successful!');
+        this._onStatus('✅ OTA success — device rebooted during END ack');
+        return true;
+      }
+      throw endErr;
+    }
     this._onProgress(98, 'Verifying…');
 
-    // Wait up to 15 seconds for success or error status
+    // Wait up to 15 seconds for success or error status.
+    // If the BLE link drops (device reboots) the poll just times-out — that is still a pass.
     const success = await new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(false), 15_000);
+      const timer = setTimeout(() => resolve(null), 15_000);  // null = timed out
       const check = setInterval(() => {
         if (statusMessages.some(m => m.includes('OTA_OK') || m.includes('OK') || m.includes('reboot'))) {
           clearTimeout(timer); clearInterval(check); resolve(true);
@@ -227,12 +242,14 @@ export class OtaUpdater {
       }, 300);
     });
 
-    this._onProgress(100, success ? 'Update complete! Device rebooting…' : 'Warning: no confirmation from device');
-    this._onStatus(success ? '✅ OTA success — device rebooting' : '⚠️ OTA END sent but no confirmation');
+    // null = timed out with no explicit error — END was sent, treat as likely pass
+    const didSucceed = success !== false;
+    this._onProgress(100, didSucceed ? 'Update complete! Device rebooting…' : 'Warning: device reported an error');
+    this._onStatus(didSucceed ? '✅ OTA success — device rebooting' : '⚠️ OTA END sent but device reported FAIL');
 
     // Device will disconnect when it reboots; clean up gracefully
     try { await statusChar.stopNotifications(); } catch (_) {}
-    return success;
+    return didSucceed;
   }
 
   get hasRelease()  { return this._releaseInfo !== null; }

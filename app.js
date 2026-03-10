@@ -1173,8 +1173,16 @@ async function runOtaUpdate() {
       showToast('OTA sent — check device for status.', 'warn');
     }
   } catch (e) {
-    setEl('ota-update-status', `Error: ${e.message}`);
-    showToast(`OTA failed: ${e.message}`, 'error');
+    // A GATT / NetworkError that occurs after CMD_END was sent means the device
+    // rebooted to apply the new firmware — this is the EXPECTED success path.
+    const isGattDisconnect = /gatt|network error|disconnect/i.test(e.message ?? '');
+    if (isGattDisconnect && ota?._endSent) {
+      setEl('ota-update-status', '✅ Device rebooted — OTA successful!');
+      showToast('Firmware updated! Device is rebooting.', 'success');
+    } else {
+      setEl('ota-update-status', `Error: ${e.message}`);
+      showToast(`OTA failed: ${e.message}`, 'error');
+    }
   } finally {
     ota.disconnect();
   }

@@ -234,23 +234,14 @@
     .active-di span { color: #556; }
 
     /* ══ REVIEW ════════════════════════════════════════════════════════ */
-    .review-body { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+    .review-body { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 
     #review-video {
-      width: 100%; aspect-ratio: 16/9; border-radius: var(--radius);
-      background: #111; object-fit: cover;
+      width: 100%; max-height: 33vh; aspect-ratio: 16/9;
+      border-radius: var(--radius); background: #111; object-fit: cover;
     }
-    .review-top-row {
-      display: flex; gap: 10px; align-items: stretch;
-    }
-    .review-top-row #review-video {
-      flex: 0 0 57%; width: auto; aspect-ratio: 4/3;
-    }
-    .review-top-labels {
-      flex: 1; display: flex; flex-direction: column; gap: 8px; overflow: hidden;
-    }
-    #review-prediction { font-size: 0.88rem; font-weight: 700; padding: 4px 0; }
-    #review-top-btns { display: flex; flex-direction: column; gap: 6px; }
+    #review-prediction { font-size: 0.95rem; font-weight: 700; text-align: center; padding: 2px 0; }
+    #review-top-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     .review-sub-row  { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     .label-btn {
       padding: 10px 8px; border: 2px solid var(--border);
@@ -509,16 +500,14 @@
     </div>
 
     <div class="review-body">
-      <!-- Video + top-class buttons side by side (Feature 6) -->
-      <div class="review-top-row">
-        <video id="review-video" controls playsinline></video>
-        <div class="review-top-labels">
-          <div id="review-prediction">AI: –</div>
-          <div id="review-top-btns"></div>
-        </div>
-      </div>
+      <video id="review-video" controls playsinline></video>
 
-      <!-- Subtype buttons — greyed when top ≠ Make (Feature 6) -->
+      <div id="review-prediction">AI: –</div>
+
+      <!-- Top-class buttons: Make | Miss | Not-a-shot -->
+      <div id="review-top-btns"></div>
+
+      <!-- Subtype buttons: Swish | Rim-in | Unsure (greyed when top ≠ Make) -->
       <div id="review-sub-btns" class="review-sub-row"></div>
 
       <div class="review-actions">
