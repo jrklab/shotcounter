@@ -34,8 +34,8 @@ const CMD_START         = 0x01;
 const CMD_END           = 0x02;
 
 const CHUNK_SIZE        = 496;  // MTU(512) - 3 ATT header - 13 padding, same as Python script
-const FIRMWARE_URL      = 'https://raw.githubusercontent.com/jrklab/basket_counting/main/fw/firmware.bin';
-const VERSION_URL       = 'https://raw.githubusercontent.com/jrklab/basket_counting/main/fw/version.txt';
+const FIRMWARE_URL      = 'https://raw.githubusercontent.com/jrklab/shotcounter/main/fw/firmware.bin';
+const VERSION_URL       = 'https://raw.githubusercontent.com/jrklab/shotcounter/main/fw/version.txt';
 
 // ── Sensor data service (also needed in optional services list for OTA flow) ──
 const SENSOR_SERVICE_UUID = 'e3a00001-1d1e-4c0c-b23a-9d9a4c5f7ad1';
