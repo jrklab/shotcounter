@@ -36,11 +36,11 @@ const EVENT_PRE_MS        = 1500;  // video/review window: ms before basket even
 const EVENT_POST_MS       = 2000;  // video/review window: ms after basket event
 
 // Each option maps to a (user_top, user_subtype) pair.
-// Swish/Rim-in/Unsure implicitly mean user_top='Made'.
+// Swish/Rim-in/Unsure implicitly mean user_top='Make'.
 const LABEL_OPTIONS = [
-  { top: 'Made',       subtype: 'Swish',   icon: '🏀', label: 'Swish'       },
-  { top: 'Made',       subtype: 'Rim-in',  icon: '🔄', label: 'Rim-in'      },
-  { top: 'Made',       subtype: 'Unsure',  icon: '❓', label: 'Unsure'      },
+  { top: 'Make',       subtype: 'Swish',   icon: '🏀', label: 'Swish'       },
+  { top: 'Make',       subtype: 'Rim-in',  icon: '🔄', label: 'Rim-in'      },
+  { top: 'Make',       subtype: 'Unsure',  icon: '❓', label: 'Unsure'      },
   { top: 'Miss',       subtype: null,      icon: '❌', label: 'Miss'        },
   { top: 'Not-a-shot', subtype: null,      icon: '🔇', label: 'Not-a-shot'  },
 ];
@@ -585,7 +585,7 @@ function onShotDetected(shot, hostNow = performance.now(), latestDeviceTs_ms = n
 
   // Map classifier basket_type → human-readable subtype
   const subtypeMap = { SWISH: 'Swish', BANK: 'Rim-in' };
-  const aiTop     = isMake ? 'Made' : (shot.classification === 'MISS' ? 'Miss' : 'Not-a-shot');
+  const aiTop     = isMake ? 'Make' : (shot.classification === 'MISS' ? 'Miss' : 'Not-a-shot');
   const aiSubtype = isMake ? (subtypeMap[type] ?? null) : null;
 
   if (isMake) sessionMakes++;
@@ -615,13 +615,14 @@ function onShotDetected(shot, hostNow = performance.now(), latestDeviceTs_ms = n
 
   sessionEvents.push(ev);
 
+  const scoreText = `${sessionMakes} out of ${sessionTotal}`;
   if (isMake) {
-    const dispLabel = aiSubtype ? `🏀 ${aiSubtype}!` : '🏀 Made!';
+    const dispLabel = aiSubtype ? `🏀 ${aiSubtype}!` : '🏀 Make!';
     setActiveEvent(dispLabel, '#2ecc71');
-    speak(aiSubtype ?? 'Made');
+    speak(`${aiSubtype ?? 'Make'}, ${scoreText}`);
   } else {
     setActiveEvent('❌ Miss', '#e74c3c');
-    speak('Miss');
+    speak(`Miss, ${scoreText}`);
   }
 }
 
@@ -706,7 +707,6 @@ function wireReviewScreen() {
 function renderReviewCard() {
   const total = sessionEvents.length;
   const event = sessionEvents[reviewIndex];
-  const shot  = event.shot;
 
   // Progress indicator
   setEl('review-progress', `${reviewIndex + 1} / ${total}`);
@@ -718,13 +718,13 @@ function renderReviewCard() {
   // AI prediction banner
   const predEl = document.getElementById('review-prediction');
   if (predEl) {
-    const icon = event.ai_top === 'Made' ? '🏀' : (event.ai_top === 'Miss' ? '❌' : '🔇');
+    const icon = event.ai_top === 'Make' ? '🏀' : (event.ai_top === 'Miss' ? '❌' : '🔇');
     predEl.textContent = `AI: ${icon} ${event.ai_top}${event.ai_subtype ? ' — ' + event.ai_subtype : ''}`;
-    predEl.style.color = event.ai_top === 'Made' ? '#2ecc71'
+    predEl.style.color = event.ai_top === 'Make' ? '#2ecc71'
                        : event.ai_top === 'Miss' ? '#e74c3c' : '#888888';
   }
   // Feature 3b: announce AI result via speech every time a card is shown
-  speak(event.ai_top === 'Made' ? (event.ai_subtype ?? 'Made') : event.ai_top);
+  speak(event.ai_top === 'Make' ? (event.ai_subtype ?? 'Make') : event.ai_top);
 
   // Video clip — seek to the event window and LOOP within the 3.5 s clip (Feature 3a)
   const videoEl = document.getElementById('review-video');
@@ -752,35 +752,50 @@ function renderReviewCard() {
     else videoEl.addEventListener('loadedmetadata', doSeek, { once: true });
   }
 
-  // Label buttons — 5 options (Swish / Rim-in / Unsure / Miss / Not-a-shot)
-  const btnsContainer = document.getElementById('review-label-btns');
-  if (btnsContainer) {
-    btnsContainer.innerHTML = '';
-    LABEL_OPTIONS.forEach(opt => {
-      const btn = document.createElement('button');
-      btn.className   = 'label-btn';
-      btn.textContent = `${opt.icon} ${opt.label}`;
-      // Highlight the button that matches current user selection
-      const sel = event.user_top === opt.top &&
-                  (opt.subtype === null ? event.user_subtype === null
-                                       : event.user_subtype === opt.subtype);
-      btn.classList.toggle('selected', sel);
-      btn.addEventListener('click', () => {
-        event.user_top    = opt.top;
-        event.user_subtype = opt.subtype;
-        reviewIndex++;
-        if (reviewIndex >= sessionEvents.length) startUpload();
-        else renderReviewCard();
+  // ── Top-class buttons: Make | Miss | Not-a-shot (Feature 6) ──────────────
+  const topContainer = document.getElementById('review-top-btns');
+  if (topContainer) {
+    topContainer.innerHTML = '';
+    [{ top: 'Make', icon: '🏀' }, { top: 'Miss', icon: '❌' }, { top: 'Not-a-shot', icon: '🔇' }]
+      .forEach(({ top, icon }) => {
+        const btn = document.createElement('button');
+        btn.className = 'label-btn label-btn-top';
+        btn.textContent = `${icon} ${top}`;
+        btn.classList.toggle('selected', event.user_top === top);
+        btn.addEventListener('click', () => {
+          event.user_top = top;
+          if (top !== 'Make') event.user_subtype = null;
+          renderReviewCard();
+        });
+        topContainer.appendChild(btn);
       });
-      btnsContainer.appendChild(btn);
-    });
   }
 
-  // Confirm AI label — accept current AI values and advance
+  // ── Subtype buttons: Swish | Rim-in | Unsure — greyed unless Make ────────
+  const subContainer = document.getElementById('review-sub-btns');
+  if (subContainer) {
+    subContainer.innerHTML = '';
+    const isMakeSelected = event.user_top === 'Make';
+    [{ sub: 'Swish', icon: '🏀' }, { sub: 'Rim-in', icon: '🔄' }, { sub: 'Unsure', icon: '❓' }]
+      .forEach(({ sub, icon }) => {
+        const btn = document.createElement('button');
+        btn.className = 'label-btn label-btn-sub';
+        btn.textContent = `${icon} ${sub}`;
+        btn.classList.toggle('selected', event.user_subtype === sub);
+        btn.classList.toggle('label-btn-disabled', !isMakeSelected);
+        btn.disabled = !isMakeSelected;
+        btn.addEventListener('click', () => {
+          event.user_subtype = sub;
+          renderReviewCard();
+        });
+        subContainer.appendChild(btn);
+      });
+  }
+
+  // Confirm — accept current user selection and advance
   const confirmBtn = document.getElementById('review-confirm-btn');
   if (confirmBtn) {
     confirmBtn.onclick = () => {
-      // user_top/user_subtype already default to AI values — no change needed
       reviewIndex++;
       if (reviewIndex >= sessionEvents.length) startUpload();
       else renderReviewCard();
@@ -863,7 +878,7 @@ async function startUpload() {
   }
 
   // ── 3. Save session summary ───────────────────────────────────────────────
-  const makes  = sessionEvents.filter(e => e.user_top === 'Made').length;
+  const makes  = sessionEvents.filter(e => e.user_top === 'Make').length;
   const total  = sessionEvents.filter(e => e.user_top !== 'Not-a-shot').length;
   const durSec = Math.round(((sessionEnd ?? performance.now()) - sessionStart) / 1000);
 
@@ -947,15 +962,15 @@ function generateSessionCsv() {
  * Fields: ai_top, ai_subtype, user_top, user_subtype, source,
  *         row_idx, event_ts_s, event_type, host_ts_udp, video_clip_ts
  *
- * Top classes:   "Made" | "Miss" | "Not-a-shot"
- * Subtypes:      "Swish" | "Rim-in" | "Unsure"  (only for "Made")
+ * Top classes:   "Make" | "Miss" | "Not-a-shot"
+ * Subtypes:      "Swish" | "Rim-in" | "Unsure"  (only for "Make")
  * event_type:    "basket" | "impact"   (lowercase)
  * video_clip_ts: seconds from video start to the detected event
  */
 function generateSessionJson() {
   const output = {};
   sessionEvents.forEach((ev, idx) => {
-    const isMake = ev.ai_top === 'Made';
+    const isMake = ev.ai_top === 'Make';
     const source = (ev.user_top === ev.ai_top && ev.user_subtype === ev.ai_subtype)
       ? 'auto' : 'manual';
 

@@ -10,10 +10,9 @@
  *   5. Write CMD_END (0x02) to OTA_CTRL.
  *   6. Wait for the device to reboot (STATUS: "OTA_OK" or similar).
  *
- * GitHub Releases API:
- *   GET https://api.github.com/repos/jrklab/basket_counting/releases/latest
- *   → finds the first asset whose name ends in ".bin"
- *   → downloads it from the browser asset download URL.
+ * Firmware source:
+ *   https://raw.githubusercontent.com/jrklab/basket_counting/main/fw/firmware.bin
+ *   Version string read from fw/version.txt in the same branch.
  *
  * Usage (ES module):
  *   import { OtaUpdater } from './ota-ble.js';
@@ -35,7 +34,8 @@ const CMD_START         = 0x01;
 const CMD_END           = 0x02;
 
 const CHUNK_SIZE        = 496;  // MTU(512) - 3 ATT header - 13 padding, same as Python script
-const RELEASES_API      = 'https://api.github.com/repos/jrklab/shotcounter/releases/latest';
+const FIRMWARE_URL      = 'https://raw.githubusercontent.com/jrklab/basket_counting/main/fw/firmware.bin';
+const VERSION_URL       = 'https://raw.githubusercontent.com/jrklab/basket_counting/main/fw/version.txt';
 
 // ── Sensor data service (also needed in optional services list for OTA flow) ──
 const SENSOR_SERVICE_UUID = 'e3a00001-1d1e-4c0c-b23a-9d9a4c5f7ad1';
@@ -63,19 +63,23 @@ export class OtaUpdater {
    */
   async fetchLatestRelease() {
     this._onStatus('Checking for latest firmware…');
-    const resp = await fetch(RELEASES_API);
-    if (!resp.ok) throw new Error(`GitHub API error: ${resp.status}`);
-    const json = await resp.json();
 
-    const asset = json.assets?.find(a => a.name.endsWith('.bin'));
-    if (!asset) throw new Error('No .bin firmware asset found in latest release.');
+    // Read version string from fw/version.txt in the repo
+    let version = 'unknown';
+    try {
+      const vResp = await fetch(VERSION_URL);
+      if (vResp.ok) version = (await vResp.text()).trim();
+    } catch (_) { /* version stays 'unknown' */ }
 
-    this._releaseInfo = {
-      tagName:     json.tag_name,
-      version:     json.tag_name.replace(/^v/, ''),
-      size:        asset.size,
-      downloadUrl: asset.browser_download_url,
-    };
+    // HEAD request to determine file size without downloading the binary
+    const headResp = await fetch(FIRMWARE_URL, { method: 'HEAD' });
+    if (!headResp.ok) {
+      throw new Error(`Firmware not found (HTTP ${headResp.status}): ${FIRMWARE_URL}`);
+    }
+    const cl   = headResp.headers.get('content-length');
+    const size = cl ? parseInt(cl, 10) : 0;
+
+    this._releaseInfo = { version, size, downloadUrl: FIRMWARE_URL };
     return { ...this._releaseInfo };
   }
 

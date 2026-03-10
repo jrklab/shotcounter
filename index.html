@@ -156,6 +156,7 @@
     }
     .dash-btn-group { width: min(100%, 400px); display: flex; flex-direction: column; gap: 12px; }
     .dash-big-btn   { font-size: 1.15rem; padding: 20px 24px; }
+    .app-version    { font-size: 0.7rem; color: var(--muted); }
 
     /* ══ PRACTICE SETUP ═══════════════════════════════════════════════ */
     .setup-body { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
@@ -239,17 +240,27 @@
       width: 100%; aspect-ratio: 16/9; border-radius: var(--radius);
       background: #111; object-fit: cover;
     }
-    #review-prediction { font-size: 1.05rem; font-weight: 700; text-align: center; padding: 6px; }
-
-    #review-label-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .review-top-row {
+      display: flex; gap: 10px; align-items: stretch;
+    }
+    .review-top-row #review-video {
+      flex: 0 0 57%; width: auto; aspect-ratio: 4/3;
+    }
+    .review-top-labels {
+      flex: 1; display: flex; flex-direction: column; gap: 8px; overflow: hidden;
+    }
+    #review-prediction { font-size: 0.88rem; font-weight: 700; padding: 4px 0; }
+    #review-top-btns { display: flex; flex-direction: column; gap: 6px; }
+    .review-sub-row  { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     .label-btn {
-      padding: 12px; border: 2px solid var(--border);
+      padding: 10px 8px; border: 2px solid var(--border);
       border-radius: var(--radius); background: var(--card);
-      color: var(--text); font-size: 0.9rem; font-weight: 600;
+      color: var(--text); font-size: 0.85rem; font-weight: 600;
       cursor: pointer; transition: all 0.15s; touch-action: manipulation;
     }
-    .label-btn:active   { transform: scale(0.96); }
-    .label-btn.selected { border-color: var(--blue); background: #172030; }
+    .label-btn:active             { transform: scale(0.96); }
+    .label-btn.selected           { border-color: var(--blue); background: #172030; }
+    .label-btn.label-btn-disabled { opacity: 0.35; cursor: not-allowed; }
 
     .review-actions { display: flex; gap: 10px; }
 
@@ -397,6 +408,7 @@
         <button id="dash-history-btn"  class="btn btn-blue   dash-big-btn">📊&nbsp; Review Practice History</button>
         <button id="dash-ota-btn"      class="btn btn-dark   dash-big-btn">⚙️&nbsp; Firmware Update</button>
       </div>
+      <p class="app-version">v0.1</p>
     </div>
   </div>
 
@@ -437,7 +449,7 @@
         <span class="setup-icon">☁️</span>
         <div class="setup-info">
           <div class="setup-label">Upload Video Clips</div>
-          <div class="setup-state">Upload clips to Firebase for review</div>
+          <div class="setup-state">Upload full session video to Firebase</div>
         </div>
         <label class="toggle-switch">
           <input type="checkbox" id="setup-upload-video-toggle" checked />
@@ -497,19 +509,21 @@
     </div>
 
     <div class="review-body">
-      <video id="review-video" controls playsinline></video>
+      <!-- Video + top-class buttons side by side (Feature 6) -->
+      <div class="review-top-row">
+        <video id="review-video" controls playsinline></video>
+        <div class="review-top-labels">
+          <div id="review-prediction">AI: –</div>
+          <div id="review-top-btns"></div>
+        </div>
+      </div>
 
-      <div id="review-prediction">AI: –</div>
-
-      <p style="font-size:0.78rem;color:var(--muted);text-align:center">
-        Tap to label — clip loops automatically. Use Confirm to accept AI label.
-      </p>
-
-      <div id="review-label-btns"></div>
+      <!-- Subtype buttons — greyed when top ≠ Make (Feature 6) -->
+      <div id="review-sub-btns" class="review-sub-row"></div>
 
       <div class="review-actions">
-        <button id="review-back-btn"    class="btn btn-dark"  style="flex:1">❯ Go Back</button>
-        <button id="review-confirm-btn" class="btn btn-green" style="flex:2">👍 Confirm AI Label</button>
+        <button id="review-back-btn"    class="btn btn-dark"  style="flex:1">❮ Go Back</button>
+        <button id="review-confirm-btn" class="btn btn-green" style="flex:2">✓ Confirm</button>
       </div>
     </div>
   </div>
