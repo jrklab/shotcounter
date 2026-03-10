@@ -35,7 +35,7 @@ const CMD_START         = 0x01;
 const CMD_END           = 0x02;
 
 const CHUNK_SIZE        = 496;  // MTU(512) - 3 ATT header - 13 padding, same as Python script
-const RELEASES_API      = 'https://api.github.com/repos/jrklab/basket_counting/releases/latest';
+const RELEASES_API      = 'https://api.github.com/repos/jrklab/shotcounter/releases/latest';
 
 // ── Sensor data service (also needed in optional services list for OTA flow) ──
 const SENSOR_SERVICE_UUID = 'e3a00001-1d1e-4c0c-b23a-9d9a4c5f7ad1';
