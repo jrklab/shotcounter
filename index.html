@@ -241,7 +241,7 @@
     }
     #review-prediction { font-size: 1.05rem; font-weight: 700; text-align: center; padding: 6px; }
 
-    #review-label-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    #review-label-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     .label-btn {
       padding: 12px; border: 2px solid var(--border);
       border-radius: var(--radius); background: var(--card);
@@ -502,14 +502,14 @@
       <div id="review-prediction">AI: –</div>
 
       <p style="font-size:0.78rem;color:var(--muted);text-align:center">
-        Tap to label this shot — it will automatically move to the next:
+        Tap to label — clip loops automatically. Use Confirm to accept AI label.
       </p>
 
       <div id="review-label-btns"></div>
 
       <div class="review-actions">
+        <button id="review-back-btn"    class="btn btn-dark"  style="flex:1">❯ Go Back</button>
         <button id="review-confirm-btn" class="btn btn-green" style="flex:2">👍 Confirm AI Label</button>
-        <button id="review-skip-btn"    class="btn btn-dark"  style="flex:1">Skip</button>
       </div>
     </div>
   </div>

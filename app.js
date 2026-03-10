@@ -35,11 +35,14 @@ const SENSOR_WINDOW_SLOTS = 400;   // max samples in rolling sensor window (~2 s
 const EVENT_PRE_MS        = 1500;  // video/review window: ms before basket event
 const EVENT_POST_MS       = 2000;  // video/review window: ms after basket event
 
+// Each option maps to a (user_top, user_subtype) pair.
+// Swish/Rim-in/Unsure implicitly mean user_top='Made'.
 const LABEL_OPTIONS = [
-  { key: 'SWISH',       icon: '🏀', label: 'Swish'       },
-  { key: 'RIM_IN',      icon: '🔄', label: 'Rim In'      },
-  { key: 'MISS',        icon: '❌', label: 'Miss'        },
-  { key: 'FALSE_ALARM', icon: '🔇', label: 'False Alarm' },
+  { top: 'Made',       subtype: 'Swish',   icon: '🏀', label: 'Swish'       },
+  { top: 'Made',       subtype: 'Rim-in',  icon: '🔄', label: 'Rim-in'      },
+  { top: 'Made',       subtype: 'Unsure',  icon: '❓', label: 'Unsure'      },
+  { top: 'Miss',       subtype: null,      icon: '❌', label: 'Miss'        },
+  { top: 'Not-a-shot', subtype: null,      icon: '🔇', label: 'Not-a-shot'  },
 ];
 
 // ── Shared instances ─────────────────────────────────────────────────────────
@@ -55,7 +58,10 @@ let sessionEnd     = null;  // performance.now() ms when practice stops
 let sessionMakes   = 0;
 let sessionTotal   = 0;
 
-/** @type {{ shot: Object, label: string, timestamp: number, host_ts: number, hostEventTs: number }[]} */
+/** @type {{ shot: Object, ai_top: string, ai_subtype: string|null,
+ *            user_top: string, user_subtype: string|null,
+ *            video_clip_ts: number, timestamp: number,
+ *            host_ts: number, hostEventTs: number }[]} */
 let sessionEvents  = [];
 let reviewIndex    = 0;
 
@@ -577,33 +583,42 @@ function onShotDetected(shot, hostNow = performance.now(), latestDeviceTs_ms = n
   const isMake = shot.classification === 'MAKE';
   const type   = shot.basket_type ?? '';
 
+  // Map classifier basket_type → human-readable subtype
+  const subtypeMap = { SWISH: 'Swish', BANK: 'Rim-in' };
+  const aiTop     = isMake ? 'Made' : (shot.classification === 'MISS' ? 'Miss' : 'Not-a-shot');
+  const aiSubtype = isMake ? (subtypeMap[type] ?? null) : null;
+
   if (isMake) sessionMakes++;
   sessionTotal++;
   updateActiveScoreboard();
 
-  // Compute the recording-relative host time of the actual basket/impact event.
-  // The classifier assigns a device timestamp (seconds); compare to the latest
-  // device timestamp in this packet to get how far back the event was, then
-  // subtract that lag from the host receive time.
+  // Compute host-corrected recording-relative time of the event
   const eventDeviceTs_ms = (shot.basket_time ?? shot.impact_time ?? 0) * 1000;
   const deviceLag_ms     = latestDeviceTs_ms !== null
     ? Math.max(0, latestDeviceTs_ms - eventDeviceTs_ms)
     : 0;
-  const hostEventTs = (hostNow - recordingStartMs) - deviceLag_ms;
+  const hostEventTs   = (hostNow - recordingStartMs) - deviceLag_ms;
+  // video_clip_ts: event time relative to video start, in seconds (Feature 1b / Feature 2)
+  const video_clip_ts = hostEventTs / 1000.0;
 
   const ev = {
     shot,
-    label:      isMake ? (type || 'MAKE') : 'MISS',  // default = AI prediction
-    timestamp:  Date.now(),
-    host_ts:    hostNow,       // performance.now() when BLE packet was received
-    hostEventTs,               // recording-relative ms of the event — used for video seek
+    ai_top:       aiTop,
+    ai_subtype:   aiSubtype,
+    user_top:     aiTop,      // default = AI prediction until user overrides
+    user_subtype: aiSubtype,  // default = AI prediction until user overrides
+    video_clip_ts,
+    timestamp:    Date.now(),
+    host_ts:      hostNow,
+    hostEventTs,
   };
 
   sessionEvents.push(ev);
 
   if (isMake) {
-    setActiveEvent(type === 'SWISH' ? '🏀 SWISH!' : '🏀 Made!', '#2ecc71');
-    speak(type === 'SWISH' ? 'Swish' : 'Made');
+    const dispLabel = aiSubtype ? `🏀 ${aiSubtype}!` : '🏀 Made!';
+    setActiveEvent(dispLabel, '#2ecc71');
+    speak(aiSubtype ?? 'Made');
   } else {
     setActiveEvent('❌ Miss', '#e74c3c');
     speak('Miss');
@@ -679,70 +694,65 @@ async function showReviewScreen() {
 }
 
 function wireReviewScreen() {
-  document.getElementById('review-skip-btn')?.addEventListener('click', () => {
-    reviewIndex++;
-    if (reviewIndex >= sessionEvents.length) {
-      startUpload();
-    } else {
+  // Back button — go to previous card (disabled on first card)
+  document.getElementById('review-back-btn')?.addEventListener('click', () => {
+    if (reviewIndex > 0) {
+      reviewIndex--;
       renderReviewCard();
     }
   });
 }
 
 function renderReviewCard() {
-  const total    = sessionEvents.length;
-  const event    = sessionEvents[reviewIndex];
-  const shot     = event.shot;
-  const isMake   = shot.classification === 'MAKE';
+  const total = sessionEvents.length;
+  const event = sessionEvents[reviewIndex];
+  const shot  = event.shot;
 
   // Progress indicator
   setEl('review-progress', `${reviewIndex + 1} / ${total}`);
 
+  // Back button: disabled on the first card
+  const backBtn = document.getElementById('review-back-btn');
+  if (backBtn) backBtn.disabled = (reviewIndex === 0);
+
   // AI prediction banner
   const predEl = document.getElementById('review-prediction');
   if (predEl) {
-    const icon = isMake ? (shot.basket_type === 'SWISH' ? '🏀' : '✅') : '❌';
-    predEl.textContent  = `AI: ${icon} ${shot.classification}${shot.basket_type ? ' — ' + shot.basket_type : ''}`;
-    predEl.style.color  = isMake ? '#2ecc71' : '#e74c3c';
+    const icon = event.ai_top === 'Made' ? '🏀' : (event.ai_top === 'Miss' ? '❌' : '🔇');
+    predEl.textContent = `AI: ${icon} ${event.ai_top}${event.ai_subtype ? ' — ' + event.ai_subtype : ''}`;
+    predEl.style.color = event.ai_top === 'Made' ? '#2ecc71'
+                       : event.ai_top === 'Miss' ? '#e74c3c' : '#888888';
   }
+  // Feature 3b: announce AI result via speech every time a card is shown
+  speak(event.ai_top === 'Made' ? (event.ai_subtype ?? 'Made') : event.ai_top);
 
-  // Video clip — seek the full-session video to this event and play only the
-  // 3.5 s window (EVENT_PRE_MS before → EVENT_POST_MS after the event).
+  // Video clip — seek to the event window and LOOP within the 3.5 s clip (Feature 3a)
   const videoEl = document.getElementById('review-video');
   if (videoEl && videoSessionUrl) {
-    const clipDuration = (EVENT_PRE_MS + EVENT_POST_MS) / 1000;   // 3.5 s
-    const seekSec  = Math.max(0, (event.hostEventTs - EVENT_PRE_MS) / 1000);
-    const endSec   = seekSec + clipDuration;
+    const seekSec = Math.max(0, (event.hostEventTs - EVENT_PRE_MS) / 1000);
+    const endSec  = seekSec + (EVENT_PRE_MS + EVENT_POST_MS) / 1000;
 
-    // Remove any previous clip-end listener from the last card.
+    // Remove previous clip listener before installing a new one
     if (_clipStopListener) {
       videoEl.removeEventListener('timeupdate', _clipStopListener);
       _clipStopListener = null;
     }
 
-    // Install a new listener that pauses as soon as the clip window ends.
+    // Loop within the clip window: when we reach endSec, seek back to seekSec
     _clipStopListener = () => {
       if (videoEl.currentTime >= endSec) {
-        videoEl.pause();
-        // Remove self — don't keep firing after pause.
-        videoEl.removeEventListener('timeupdate', _clipStopListener);
-        _clipStopListener = null;
+        videoEl.currentTime = seekSec;
+        videoEl.play().catch(() => {});
       }
     };
     videoEl.addEventListener('timeupdate', _clipStopListener);
 
-    const doSeek = () => {
-      videoEl.currentTime = seekSec;
-      videoEl.play().catch(() => {});
-    };
-    if (videoEl.readyState >= 1) {   // HAVE_METADATA
-      doSeek();
-    } else {
-      videoEl.addEventListener('loadedmetadata', doSeek, { once: true });
-    }
+    const doSeek = () => { videoEl.currentTime = seekSec; videoEl.play().catch(() => {}); };
+    if (videoEl.readyState >= 1) doSeek();
+    else videoEl.addEventListener('loadedmetadata', doSeek, { once: true });
   }
 
-  // Label buttons — build dynamically
+  // Label buttons — 5 options (Swish / Rim-in / Unsure / Miss / Not-a-shot)
   const btnsContainer = document.getElementById('review-label-btns');
   if (btnsContainer) {
     btnsContainer.innerHTML = '';
@@ -750,32 +760,30 @@ function renderReviewCard() {
       const btn = document.createElement('button');
       btn.className   = 'label-btn';
       btn.textContent = `${opt.icon} ${opt.label}`;
-      btn.classList.toggle('selected', event.label === opt.key);
+      // Highlight the button that matches current user selection
+      const sel = event.user_top === opt.top &&
+                  (opt.subtype === null ? event.user_subtype === null
+                                       : event.user_subtype === opt.subtype);
+      btn.classList.toggle('selected', sel);
       btn.addEventListener('click', () => {
-        event.label = opt.key;
-        // Advance
+        event.user_top    = opt.top;
+        event.user_subtype = opt.subtype;
         reviewIndex++;
-        if (reviewIndex >= sessionEvents.length) {
-          startUpload();
-        } else {
-          renderReviewCard();
-        }
+        if (reviewIndex >= sessionEvents.length) startUpload();
+        else renderReviewCard();
       });
       btnsContainer.appendChild(btn);
     });
   }
 
-  // Confirm button (uses current AI label)
+  // Confirm AI label — accept current AI values and advance
   const confirmBtn = document.getElementById('review-confirm-btn');
   if (confirmBtn) {
     confirmBtn.onclick = () => {
-      // Keep current label (already set to AI prediction by default)
+      // user_top/user_subtype already default to AI values — no change needed
       reviewIndex++;
-      if (reviewIndex >= sessionEvents.length) {
-        startUpload();
-      } else {
-        renderReviewCard();
-      }
+      if (reviewIndex >= sessionEvents.length) startUpload();
+      else renderReviewCard();
     };
   }
 }
@@ -836,11 +844,15 @@ async function startUpload() {
         userId:        uid,
         sessionId,
         timestamp:     ev.timestamp,
-        ai_prediction: ev.shot.classification,
+        ai_prediction: ev.ai_top,
+        ai_subtype:    ev.ai_subtype,
         basket_type:   ev.shot.basket_type ?? null,
-        user_label:    ev.label,
+        user_label:    ev.user_top + (ev.user_subtype ? '/' + ev.user_subtype : ''),
+        user_top:      ev.user_top,
+        user_subtype:  ev.user_subtype,
         confidence:    ev.shot.confidence ?? 0,
-        host_event_ts: ev.hostEventTs,   // recording-relative ms — for offline seek
+        host_event_ts: ev.hostEventTs,
+        video_clip_ts: ev.video_clip_ts,
       });
       shotIds.push(id);
     } catch (e) {
@@ -851,8 +863,8 @@ async function startUpload() {
   }
 
   // ── 3. Save session summary ───────────────────────────────────────────────
-  const makes  = sessionEvents.filter(e => e.label !== 'MISS' && e.label !== 'FALSE_ALARM').length;
-  const total  = sessionEvents.filter(e => e.label !== 'FALSE_ALARM').length;
+  const makes  = sessionEvents.filter(e => e.user_top === 'Made').length;
+  const total  = sessionEvents.filter(e => e.user_top !== 'Not-a-shot').length;
   const durSec = Math.round(((sessionEnd ?? performance.now()) - sessionStart) / 1000);
 
   // ── 3b. Upload full session video (if enabled) ────────────────────────────
@@ -931,37 +943,33 @@ function generateSessionCsv() {
 }
 
 /**
- * Generate a session_labels.json Blob matching the triage_labels.py format:
- *   { "<idx>": { top, subtype, source, event_ts_s, event_type, host_ts_udp } }
+ * Generate session_labels.json matching the unified schema (Feature 2).
+ * Fields: ai_top, ai_subtype, user_top, user_subtype, source,
+ *         row_idx, event_ts_s, event_type, host_ts_udp, video_clip_ts
  *
- * - generated AFTER shot review so user labels are final
- * - host_ts_udp is in seconds (performance.now() / 1000) to match Python convention
+ * Top classes:   "Made" | "Miss" | "Not-a-shot"
+ * Subtypes:      "Swish" | "Rim-in" | "Unsure"  (only for "Made")
+ * event_type:    "basket" | "impact"   (lowercase)
+ * video_clip_ts: seconds from video start to the detected event
  */
 function generateSessionJson() {
   const output = {};
   sessionEvents.forEach((ev, idx) => {
-    const shot   = ev.shot;
-    const isMake = shot.classification === 'MAKE';
-    const label  = ev.label;
-
-    let top, subtype;
-    if (label === 'FALSE_ALARM')    { top = 'NOT_SHOT'; subtype = null; }
-    else if (label === 'MISS')      { top = 'MISS';     subtype = null; }
-    else if (label === 'SWISH')     { top = 'MAKE';     subtype = 'SWISH'; }
-    else if (label === 'RIM_IN')    { top = 'MAKE';     subtype = 'RIM_IN'; }
-    else                            { top = 'MAKE';     subtype = label ?? null; }
-
-    // Determine whether the user changed the AI prediction
-    const aiLabel = isMake ? (shot.basket_type || 'MAKE') : 'MISS';
-    const source  = (label === aiLabel) ? 'auto' : 'manual';
+    const isMake = ev.ai_top === 'Made';
+    const source = (ev.user_top === ev.ai_top && ev.user_subtype === ev.ai_subtype)
+      ? 'auto' : 'manual';
 
     output[idx] = {
-      top,
-      subtype,
+      ai_top:        ev.ai_top,
+      ai_subtype:    ev.ai_subtype,
+      user_top:      ev.user_top,
+      user_subtype:  ev.user_subtype,
       source,
-      event_ts_s:  shot.basket_time ?? shot.impact_time ?? 0,
-      event_type:  isMake ? 'basket' : 'impact',
-      host_ts_udp: (ev.host_ts ?? 0) / 1000.0,   // seconds, matches Python convention
+      row_idx:       idx,
+      event_ts_s:    ev.shot.basket_time ?? ev.shot.impact_time ?? 0,
+      event_type:    isMake ? 'basket' : 'impact',
+      host_ts_udp:   (ev.host_ts ?? 0) / 1000.0,
+      video_clip_ts: ev.video_clip_ts ?? null,
     };
   });
   return new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
