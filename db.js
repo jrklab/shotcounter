@@ -111,6 +111,25 @@ export async function uploadSessionVideo(uid, sessionId, videoBlob, mimeType) {
   return getDownloadURL(storRef);
 }
 
+// ── Practice summary JSON upload ─────────────────────────────────────────────
+
+/**
+ * Upload the practice summary JSON to Firebase Storage.
+ * Stored at: json/{uid}/{sessionId}/practice_summary.json
+ *
+ * @param {string} uid
+ * @param {string} sessionId
+ * @param {Blob}   summaryBlob   application/json blob
+ * @returns {Promise<string>}   Public download URL
+ */
+export async function uploadPracticeSummary(uid, sessionId, summaryBlob) {
+  const path    = `json/${uid}/${sessionId}/practice_summary.json`;
+  const storRef = ref(storage, path);
+  const meta    = { contentType: 'application/json' };
+  await uploadBytes(storRef, summaryBlob, meta);
+  return getDownloadURL(storRef);
+}
+
 // ── Shot document ────────────────────────────────────────────────────────────
 
 /**
@@ -150,10 +169,11 @@ export async function saveSession(uid, sessionId, summary) {
   const sessionRef = doc(db, 'users', uid, 'sessions', sessionId);
   await setDoc(sessionRef, {
     ...summary,
-    userId:    uid,
+    userId:      uid,
     sessionId,
-    accuracy:  summary.total > 0 ? Math.round(summary.makes / summary.total * 100) : 0,
-    createdAt: Timestamp.now(),
+    accuracy:    summary.total    > 0 ? Math.round(summary.makes    / summary.total    * 100) : 0,
+    ai_accuracy: summary.ai_total > 0 ? Math.round(summary.ai_makes / summary.ai_total * 100) : 0,
+    createdAt:   Timestamp.now(),
   });
 }
 

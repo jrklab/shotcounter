@@ -78,7 +78,7 @@ let videoEnabled       = false;
 let recordingStartMs   = 0;     // performance.now() when recording started
 let videoSessionBlob   = null;  // assembled full-session video Blob
 let videoSessionUrl    = null;  // object URL for the review video element
-let uploadVideoEnabled = true;  // upload full session video to Firebase Storage
+let uploadVideoEnabled = false;  // upload full session video to Firebase Storage (user must enable)
 let _clipStopListener  = null;  // active timeupdate listener for clip-end pause
 
 // BLE / device state
@@ -358,8 +358,8 @@ function resetPracticeSetup() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function wirePracticeActive() {
-  const stopBtn = document.getElementById('active-stop-btn');
-  stopBtn?.addEventListener('click', stopPracticeSession);
+  document.getElementById('active-stop-btn')?.addEventListener('click', stopPracticeSession);
+  document.getElementById('active-restart-btn')?.addEventListener('click', restartPracticeSession);
 }
 
 function startPracticeSession() {
@@ -444,6 +444,40 @@ function stopPracticeSession() {
     mediaRecorder = null;
     finalizeAndReview();
   }
+}
+
+/**
+ * Restart the session in-place: reset all counters + re-calibrate baseline,
+ * but keep camera and BLE connected.
+ */
+function restartPracticeSession() {
+  sessionId        = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 15);
+  sessionStart     = performance.now();
+  sessionEnd       = null;
+  sessionMakes     = 0;
+  sessionTotal     = 0;
+  sessionEvents    = [];
+  sensorWindow     = [];
+  allSensorData    = [];
+  allVideoChunks   = [];
+  videoSessionBlob = null;
+  if (videoSessionUrl) { URL.revokeObjectURL(videoSessionUrl); videoSessionUrl = null; }
+
+  // Fresh classifier + parser for new baseline calibration
+  classifier = new ShotClassifier();
+  parser.reset();
+
+  // Restart video recording without re-requesting camera
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    try { mediaRecorder.stop(); } catch (_) {}
+    mediaRecorder = null;
+  }
+  recordingStartMs = 0;
+  if (mediaStream && videoEnabled) startVideoRecording();
+
+  updateActiveScoreboard();
+  setActiveEvent('calibrating baseline…', '#f39c12');
+  showCalibrationBar(true);
 }
 
 // ── Scoreboard helpers ───────────────────────────────────────────────────────
@@ -704,7 +738,7 @@ function wireReviewScreen() {
   });
 }
 
-function renderReviewCard() {
+function renderReviewCard(announcement = null) {
   const total = sessionEvents.length;
   const event = sessionEvents[reviewIndex];
 
@@ -723,8 +757,8 @@ function renderReviewCard() {
     predEl.style.color = event.ai_top === 'Make' ? '#2ecc71'
                        : event.ai_top === 'Miss' ? '#e74c3c' : '#888888';
   }
-  // Feature 3b: announce AI result via speech every time a card is shown
-  speak(event.ai_top === 'Make' ? (event.ai_subtype ?? 'Make') : event.ai_top);
+  // Announce: AI result on card load, or explicit override (e.g. 'Correction, Miss')
+  speak(announcement ?? (event.ai_top === 'Make' ? (event.ai_subtype ?? 'Make') : event.ai_top));
 
   // Video clip — seek to the event window and LOOP within the 3.5 s clip (Feature 3a)
   const videoEl = document.getElementById('review-video');
@@ -765,7 +799,7 @@ function renderReviewCard() {
         btn.addEventListener('click', () => {
           event.user_top = top;
           if (top !== 'Make') event.user_subtype = null;
-          renderReviewCard();
+          renderReviewCard(`Correction, ${top}`);
         });
         topContainer.appendChild(btn);
       });
@@ -786,7 +820,7 @@ function renderReviewCard() {
         btn.disabled = !isMakeSelected;
         btn.addEventListener('click', () => {
           event.user_subtype = sub;
-          renderReviewCard();
+          renderReviewCard(`Correction, ${sub}`);
         });
         subContainer.appendChild(btn);
       });
@@ -812,9 +846,9 @@ async function startUpload() {
   const uid = user?.uid;
   if (!uid) { showScreen('dashboard'); return; }
 
-  // Steps: 1 CSV + 1 JSON + N shots + optional 1 session video
+  // Steps: 1 CSV + 1 JSON + 1 Summary + N shots + optional 1 session video
   const videoSteps  = uploadVideoEnabled ? 1 : 0;
-  const totalSteps  = 2 + sessionEvents.length + videoSteps;
+  const totalSteps  = 3 + sessionEvents.length + videoSteps;
   let   doneSteps   = 0;
   const shotIds     = [];
 
@@ -828,6 +862,13 @@ async function startUpload() {
 
   setStatus('Generating session data…');
 
+  // ── Compute session stats ─────────────────────────────────────────────────
+  const userMakes = sessionEvents.filter(e => e.user_top === 'Make').length;
+  const userTotal = sessionEvents.filter(e => e.user_top !== 'Not-a-shot').length;
+  const aiMakes   = sessionEvents.filter(e => e.ai_top  === 'Make').length;
+  const aiTotal   = sessionEvents.filter(e => e.ai_top  !== 'Not-a-shot').length;
+  const durSec    = Math.round(((sessionEnd ?? performance.now()) - sessionStart) / 1000);
+
   // ── 1. Upload full-session CSV ────────────────────────────────────────────
   try {
     setStatus('Uploading session CSV…');
@@ -836,10 +877,9 @@ async function startUpload() {
   } catch (e) {
     console.warn('CSV upload failed:', e);
   }
-  doneSteps++;
-  updateBar();
+  doneSteps++; updateBar();
 
-  // ── 1b. Upload session labels JSON ───────────────────────────────────────
+  // ── 2. Upload session labels JSON ─────────────────────────────────────────
   try {
     setStatus('Uploading session labels JSON…');
     const jsonBlob = generateSessionJson();
@@ -847,10 +887,29 @@ async function startUpload() {
   } catch (e) {
     console.warn('Labels JSON upload failed:', e);
   }
-  doneSteps++;
-  updateBar();
+  doneSteps++; updateBar();
 
-  // ── 2. Save shot documents (no per-shot video — session video uploaded separately) ──
+  // ── 3. Upload practice summary JSON ──────────────────────────────────────
+  try {
+    setStatus('Uploading practice summary…');
+    const summary = {
+      session_id:    sessionId,
+      duration_sec:  durSec,
+      user_makes:    userMakes,
+      user_total:    userTotal,
+      user_accuracy: userTotal > 0 ? Math.round(userMakes / userTotal * 100) : 0,
+      ai_makes:      aiMakes,
+      ai_total:      aiTotal,
+      ai_accuracy:   aiTotal > 0 ? Math.round(aiMakes / aiTotal * 100) : 0,
+    };
+    const summaryBlob = new Blob([JSON.stringify(summary, null, 2)], { type: 'application/json' });
+    await uploadPracticeSummary(uid, sessionId, summaryBlob);
+  } catch (e) {
+    console.warn('Practice summary upload failed:', e);
+  }
+  doneSteps++; updateBar();
+
+  // ── 4. Save shot documents ────────────────────────────────────────────────
   for (let i = 0; i < sessionEvents.length; i++) {
     const ev = sessionEvents[i];
     try {
@@ -873,32 +932,38 @@ async function startUpload() {
     } catch (e) {
       console.warn('Shot save failed:', e);
     }
-    doneSteps++;
-    updateBar();
+    doneSteps++; updateBar();
   }
 
-  // ── 3. Save session summary ───────────────────────────────────────────────
-  const makes  = sessionEvents.filter(e => e.user_top === 'Make').length;
-  const total  = sessionEvents.filter(e => e.user_top !== 'Not-a-shot').length;
-  const durSec = Math.round(((sessionEnd ?? performance.now()) - sessionStart) / 1000);
-
-  // ── 3b. Upload full session video (if enabled) ────────────────────────────
+  // ── 5. Upload session video (if enabled) ──────────────────────────────────
   let sessionVideoUrl = null;
-  if (uploadVideoEnabled && videoSessionBlob) {
-    try {
-      setStatus('Uploading session video…');
-      sessionVideoUrl = await uploadSessionVideo(uid, sessionId, videoSessionBlob, videoMimeType);
-      // Clean up IndexedDB now that video is safely in the cloud
-      deleteSessionVideo(sessionId).catch(() => {});
-    } catch (e) {
-      console.warn('Session video upload failed:', e);
+  if (uploadVideoEnabled) {
+    let blob = videoSessionBlob;
+    if (!blob) {
+      try { blob = await loadSessionVideo(sessionId); } catch (_) {}
     }
-    doneSteps++;
-    updateBar();
+    if (blob) {
+      try {
+        setStatus('Uploading session video…');
+        sessionVideoUrl = await uploadSessionVideo(uid, sessionId, blob, videoMimeType);
+        deleteSessionVideo(sessionId).catch(() => {});
+      } catch (e) {
+        console.warn('Session video upload failed:', e);
+        setStatus('⚠️ Video upload failed — data saved.');
+      }
+    } else {
+      setStatus('⚠️ No video data found — skipping video upload.');
+    }
+    doneSteps++; updateBar();
   }
 
+  // ── 6. Save session summary to Firestore ──────────────────────────────────
   try {
-    await saveSession(uid, sessionId, { makes, total, durationSec: durSec, shotIds, video_url: sessionVideoUrl });
+    await saveSession(uid, sessionId, {
+      makes: userMakes, total: userTotal,
+      ai_makes: aiMakes, ai_total: aiTotal,
+      durationSec: durSec, shotIds, video_url: sessionVideoUrl,
+    });
   } catch (e) {
     console.warn('Session save failed:', e);
   }
@@ -909,8 +974,10 @@ async function startUpload() {
   setStatus('✅ Upload complete!');
   if (progressEl) progressEl.style.width = '100%';
 
-  // Show summary
-  setEl('upload-summary', `Session: ${makes} / ${total} shots · ${durSec}s`);
+  // ── Show summary ──────────────────────────────────────────────────────────
+  const uPct = userTotal > 0 ? Math.round(userMakes / userTotal * 100) : 0;
+  const aPct = aiTotal  > 0 ? Math.round(aiMakes  / aiTotal  * 100) : 0;
+  setEl('upload-summary', `User: ${userMakes}/${userTotal} (${uPct}%) · AI: ${aiMakes}/${aiTotal} · ${durSec}s`);
   const doneBtn = document.getElementById('upload-done-btn');
   if (doneBtn) doneBtn.style.display = '';
   doneBtn?.addEventListener('click', () => {
@@ -1006,12 +1073,9 @@ async function loadHistory() {
   if (contentEl) contentEl.style.display = 'none';
 
   try {
-    const [sessions, allShots] = await Promise.all([
-      fetchSessions(user.uid, 20),
-      fetchAllShots(user.uid),
-    ]);
+    const sessions = await fetchSessions(user.uid, 10);
 
-    renderLifetimeStats(allShots);
+    renderLifetimeStats(sessions);
     renderTrendChart(sessions.slice().reverse());   // oldest first for chart
     renderSessionList(sessions);
 
@@ -1026,13 +1090,13 @@ async function loadHistory() {
   }
 }
 
-function renderLifetimeStats(shots) {
-  const makes = shots.filter(s => s.user_label !== 'MISS' && s.user_label !== 'FALSE_ALARM').length;
-  const total = shots.filter(s => s.user_label !== 'FALSE_ALARM').length;
-  const pct   = total > 0 ? Math.round(makes / total * 100) : 0;
-  setEl('stat-total',  total);
-  setEl('stat-makes',  makes);
-  setEl('stat-pct',    `${pct}%`);
+function renderLifetimeStats(sessions) {
+  let userMakes = 0, userTotal = 0;
+  for (const s of sessions) { userMakes += s.makes ?? 0; userTotal += s.total ?? 0; }
+  const pct = userTotal > 0 ? Math.round(userMakes / userTotal * 100) : 0;
+  setEl('stat-total', userTotal);
+  setEl('stat-makes', userMakes);
+  setEl('stat-pct',   `${pct}%`);
 }
 
 function renderTrendChart(sessions) {
@@ -1090,24 +1154,50 @@ function renderSessionList(sessions) {
     return;
   }
 
-  for (const s of sessions) {
-    const d    = s.createdAt?.toDate?.() ?? new Date(s.createdAt?.seconds * 1000 ?? 0);
-    const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    const time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    const pct  = s.total > 0 ? Math.round(s.makes / s.total * 100) : 0;
-    const dur  = s.durationSec ? `${Math.floor(s.durationSec / 60)}′${String(s.durationSec % 60).padStart(2,'0')}″` : '';
+  // Table header
+  const hdr = document.createElement('div');
+  hdr.className = 'session-item session-hdr';
+  hdr.innerHTML = '<div class="sh-date">Date</div><div class="sh-dur">Dur</div>' +
+                  '<div class="sh-score">User</div><div class="sh-score">AI</div>';
+  listEl.appendChild(hdr);
 
-    const item = document.createElement('div');
-    item.className = 'session-item';
-    item.innerHTML = `
-      <div class="session-date">${date} <span class="session-time">${time}</span></div>
-      <div class="session-stats">
-        <span class="session-makes">${s.makes} / ${s.total}</span>
-        <span class="session-pct" style="color:${pct >= 50 ? '#2ecc71' : '#e74c3c'}">${pct}%</span>
-        ${dur ? `<span class="session-dur">${dur}</span>` : ''}
-      </div>`;
-    listEl.appendChild(item);
+  let totDur = 0, totUM = 0, totUT = 0, totAM = 0, totAT = 0;
+
+  for (const s of sessions) {
+    const d   = s.createdAt?.toDate?.() ?? new Date((s.createdAt?.seconds ?? 0) * 1000);
+    const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+    const uM = s.makes    ?? 0;
+    const uT = s.total    ?? 0;
+    const aM = s.ai_makes ?? uM;
+    const aT = s.ai_total ?? uT;
+    const uP = uT > 0 ? Math.round(uM / uT * 100) : 0;
+    const aP = aT > 0 ? Math.round(aM / aT * 100) : 0;
+    const dur = s.durationSec ? Math.round(s.durationSec / 60) : 0;
+    totDur += dur; totUM += uM; totUT += uT; totAM += aM; totAT += aT;
+
+    const row = document.createElement('div');
+    row.className = 'session-item';
+    row.innerHTML =
+      `<div class="sh-date">${date}<br><span class="session-time">${time}</span></div>` +
+      `<div class="sh-dur">${dur}m</div>` +
+      `<div class="sh-score"><b>${uM}/${uT}</b><br><span style="color:${uP >= 50 ? '#2ecc71' : '#e74c3c'}">${uP}%</span></div>` +
+      `<div class="sh-score"><b>${aM}/${aT}</b><br><span style="color:${aP >= 50 ? '#2ecc71' : '#e74c3c'}">${aP}%</span></div>`;
+    listEl.appendChild(row);
   }
+
+  // Totals row
+  const tUP = totUT > 0 ? Math.round(totUM / totUT * 100) : 0;
+  const tAP = totAT > 0 ? Math.round(totAM / totAT * 100) : 0;
+  const tot = document.createElement('div');
+  tot.className = 'session-item session-totals';
+  tot.innerHTML =
+    `<div class="sh-date"><b>Total</b></div>` +
+    `<div class="sh-dur"><b>${totDur}m</b></div>` +
+    `<div class="sh-score"><b>${totUM}/${totUT}</b><br><span style="color:${tUP >= 50 ? '#2ecc71' : '#e74c3c'}">${tUP}%</span></div>` +
+    `<div class="sh-score"><b>${totAM}/${totAT}</b><br><span style="color:${tAP >= 50 ? '#2ecc71' : '#e74c3c'}">${tAP}%</span></div>`;
+  listEl.appendChild(tot);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -299,15 +299,16 @@
 
     .session-item {
       background: var(--card); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 12px 14px;
-      margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;
+      border-radius: var(--radius); padding: 10px 12px;
+      margin-bottom: 6px;
+      display: grid; grid-template-columns: 1fr 44px 72px 72px; align-items: center; gap: 4px;
     }
-    .session-date  { font-size: 0.82rem; color: var(--text); }
+    .session-hdr   { background: transparent; border-color: transparent; font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px; }
+    .session-totals { border-top: 1px solid var(--border); margin-top: 4px; }
+    .sh-date  { font-size: 0.82rem; color: var(--text); }
     .session-time  { color: var(--muted); font-size: 0.78rem; }
-    .session-stats { display: flex; align-items: center; gap: 12px; }
-    .session-makes { font-size: 0.9rem; font-weight: 700; color: var(--score); }
-    .session-pct   { font-size: 0.88rem; font-weight: 700; }
-    .session-dur   { font-size: 0.78rem; color: var(--muted); }
+    .sh-dur   { font-size: 0.82rem; color: var(--muted); text-align: center; }
+    .sh-score { font-size: 0.82rem; text-align: center; line-height: 1.35; }
 
     #history-loading { color: var(--muted); text-align: center; padding: 40px; font-size: 0.9rem; }
 
@@ -443,7 +444,7 @@
           <div class="setup-state">Upload full session video to Firebase</div>
         </div>
         <label class="toggle-switch">
-          <input type="checkbox" id="setup-upload-video-toggle" checked />
+          <input type="checkbox" id="setup-upload-video-toggle" />
           <span class="toggle-track"></span>
         </label>
       </div>
@@ -486,6 +487,7 @@
           🌡&nbsp;<span id="di-temp">–</span>
         </div>
         <button id="active-stop-btn" class="btn btn-red">🛑&nbsp; Stop Practice</button>
+        <button id="active-restart-btn" class="btn btn-dark" style="width:min(100%,240px);font-size:0.95rem;padding:12px">🔄&nbsp; Restart Practice</button>
       </div>
     </div>
   </div>
