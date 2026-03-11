@@ -24,7 +24,7 @@ import { OtaUpdater }                              from './ota-ble.js';
 import { saveShot, saveSession,
          fetchSessions, fetchAllShots,
          uploadSessionCsv, uploadSessionJson,
-         uploadSessionVideo }                        from './db.js';
+         uploadSessionVideo, uploadPracticeSummary } from './db.js';
 import { storeSessionVideo, loadSessionVideo,
          deleteSessionVideo }                        from './video-store.js';
 
@@ -799,6 +799,7 @@ function renderReviewCard(announcement = null) {
         btn.addEventListener('click', () => {
           event.user_top = top;
           if (top !== 'Make') event.user_subtype = null;
+          else if (!event.user_subtype) event.user_subtype = 'Rim-in';
           renderReviewCard(`Correction, ${top}`);
         });
         topContainer.appendChild(btn);
@@ -1091,11 +1092,11 @@ async function loadHistory() {
 }
 
 function renderLifetimeStats(sessions) {
-  let userMakes = 0, userTotal = 0;
-  for (const s of sessions) { userMakes += s.makes ?? 0; userTotal += s.total ?? 0; }
-  const pct = userTotal > 0 ? Math.round(userMakes / userTotal * 100) : 0;
-  setEl('stat-total', userTotal);
-  setEl('stat-makes', userMakes);
+  let aiMakes = 0, aiTotal = 0;
+  for (const s of sessions) { aiMakes += s.ai_makes ?? s.makes ?? 0; aiTotal += s.ai_total ?? s.total ?? 0; }
+  const pct = aiTotal > 0 ? Math.round(aiMakes / aiTotal * 100) : 0;
+  setEl('stat-total', aiTotal);
+  setEl('stat-makes', aiMakes);
   setEl('stat-pct',   `${pct}%`);
 }
 
