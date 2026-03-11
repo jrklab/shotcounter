@@ -286,7 +286,7 @@ class ShotClassifier {
           // TOF cleared — ball has passed through: emit MAKE
           shot = {
             impact_time:    this.impactTime,
-            basket_time:    ts,
+            basket_time:    this.stateStartTime, // time recorded at BASKET_DETECTED entry
             classification: 'MAKE',
             basket_type:    this._basketOrigin,
             confidence:     this._basketOrigin === 'BANK' ? 0.95 : 0.85,
