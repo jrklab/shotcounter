@@ -11,7 +11,7 @@
  *   6. Wait for the device to reboot (STATUS: "OTA_OK" or similar).
  *
  * Firmware source:
- *   https://raw.githubusercontent.com/jrklab/basket_counting/main/fw/firmware.bin
+ *   https://raw.githubusercontent.com/jrklab/shotcounter_beta/main/fw/firmware.bin
  *   Version string read from fw/version.txt in the same branch.
  *
  * Usage (ES module):
@@ -35,8 +35,8 @@ const CMD_END           = 0x02;
 
 const CHUNK_SIZE        = 496;  // MTU(512) - 3 ATT header - 13 padding, same as Python script
 // I will copy this to a public repo at shotcounter/. I will change the URL manually to reflect that. Don't change it back
-const FIRMWARE_URL      = 'https://raw.githubusercontent.com/jrklab/shotcounter/main/fw/firmware.bin';
-const VERSION_URL       = 'https://raw.githubusercontent.com/jrklab/shotcounter/main/fw/version.txt';
+const FIRMWARE_URL      = 'https://raw.githubusercontent.com/jrklab/shotcounter_beta/main/fw/firmware.bin';
+const VERSION_URL       = 'https://raw.githubusercontent.com/jrklab/shotcounter_beta/main/fw/version.txt';
 
 // ── Sensor data service (also needed in optional services list for OTA flow) ──
 const SENSOR_SERVICE_UUID = 'e3a00001-1d1e-4c0c-b23a-9d9a4c5f7ad1';
@@ -74,9 +74,16 @@ export class OtaUpdater {
     } catch (_) { /* version stays 'unknown' */ }
 
     // HEAD request to determine file size without downloading the binary
+    // NOTE: This will return 404 if shotcounter_beta is a private repo — raw.githubusercontent.com
+    // does not serve private files to unauthenticated browser requests. Make the repo public or
+    // move fw/ files to a public repo/CDN.
     const headResp = await fetch(FIRMWARE_URL, { method: 'HEAD' });
     if (!headResp.ok) {
-      throw new Error(`Firmware not found (HTTP ${headResp.status}): ${FIRMWARE_URL}`);
+      if (headResp.status === 404) {
+        throw new Error(
+          `fw/firmware.bin not found (HTTP 404). Ensure the file is committed to a public repo at ${FIRMWARE_URL}`);
+      }
+      throw new Error(`Firmware check failed (HTTP ${headResp.status})`);
     }
     const cl   = headResp.headers.get('content-length');
     const size = cl ? parseInt(cl, 10) : 0;

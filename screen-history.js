@@ -37,8 +37,9 @@ export async function loadHistory() {
 function renderLifetimeStats(sessions) {
   let aiMakes = 0, aiTotal = 0;
   for (const s of sessions) {
-    aiMakes += s.ai_makes ?? s.makes ?? 0;
-    aiTotal += s.ai_total ?? s.total ?? 0;
+    const pm = s.Practice_Meta ?? {};
+    aiMakes += pm.ai_makes ?? 0;
+    aiTotal += pm.ai_total ?? 0;
   }
   const pct = aiTotal > 0 ? Math.round(aiMakes / aiTotal * 100) : 0;
   setEl('stat-total', aiTotal);
@@ -52,10 +53,14 @@ function renderTrendChart(sessions) {
   if (!ctx || !window.Chart) return;
 
   const labels = sessions.map(s => {
-    const d = s.createdAt?.toDate?.() ?? new Date(s.createdAt?.seconds * 1000 ?? 0);
+    const ts = s.createdAt ?? s.Practice_Meta?.createdAt;
+    const d  = ts?.toDate?.() ?? new Date((ts?.seconds ?? 0) * 1000);
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   });
-  const data = sessions.map(s => s.total > 0 ? Math.round(s.makes / s.total * 100) : 0);
+  const data = sessions.map(s => {
+    const pm = s.Practice_Meta ?? {};
+    return pm.user_total > 0 ? Math.round((pm.user_makes ?? 0) / pm.user_total * 100) : 0;
+  });
 
   if (S.historyChart) S.historyChart.destroy();
 
@@ -106,17 +111,19 @@ function renderSessionList(sessions) {
   let totDur = 0, totUM = 0, totUT = 0, totAM = 0, totAT = 0;
 
   for (const s of sessions) {
-    const d    = s.createdAt?.toDate?.() ?? new Date((s.createdAt?.seconds ?? 0) * 1000);
+    const ts   = s.createdAt ?? s.Practice_Meta?.createdAt;
+    const d    = ts?.toDate?.() ?? new Date((ts?.seconds ?? 0) * 1000);
     const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     const time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
-    const uM = s.makes    ?? 0;
-    const uT = s.total    ?? 0;
-    const aM = s.ai_makes ?? uM;
-    const aT = s.ai_total ?? uT;
+    const pm = s.Practice_Meta ?? {};
+    const uM = pm.user_makes ?? 0;
+    const uT = pm.user_total ?? 0;
+    const aM = pm.ai_makes   ?? uM;
+    const aT = pm.ai_total   ?? uT;
     const uP = uT > 0 ? Math.round(uM / uT * 100) : 0;
     const aP = aT > 0 ? Math.round(aM / aT * 100) : 0;
-    const dur = s.durationSec ? Math.round(s.durationSec / 60) : 0;
+    const dur = pm.durationSec ? Math.round(pm.durationSec / 60) : 0;
     totDur += dur; totUM += uM; totUT += uT; totAM += aM; totAT += aT;
 
     const row = document.createElement('div');

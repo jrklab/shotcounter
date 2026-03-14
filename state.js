@@ -7,6 +7,9 @@ export const SENSOR_WINDOW_SLOTS = 400;    // max samples in rolling window (~2 
 export const EVENT_PRE_MS        = 1500;   // ms before event for review window
 export const EVENT_POST_MS       = 2000;   // ms after event for review window
 
+// ── App revision — increment here when releasing a new web app version ────────
+export const APP_REVISION = 'v0.1.8';
+
 // ── Shared mutable state ──────────────────────────────────────────────────────
 // All screen modules import and mutate this object directly (S.foo = ...).
 export const S = {
@@ -21,8 +24,23 @@ export const S = {
   sessionMakes:   0,
   sessionTotal:   0,
 
+  // ── Battery (mV, read from sensor packets) ──────────────────────────────────
+  battStartMv:  null,   // first non-zero battery reading of the session
+  battEndMv:    null,   // most-recent battery reading  lastBattMv:   null,   // most-recent battery reading (any time, for Device Info page)
+  lastTempC:    null,   // most-recent temperature reading (any time)
+  // ── BLE packet loss counter ─────────────────────────────────────────────────
+  totalLostPackets: 0,  // accumulated from parser.parse() lostPackets across session
+
+  // ── Raw BLE packet log (Task 4) ─────────────────────────────────────────────
+  // Each entry: { hostMs: performance.now(), buffer: ArrayBuffer (336 bytes) }
+  allRawPackets: [],
+
+  // ── Recording timestamps ────────────────────────────────────────────────────
+  recordingStartGlobalMs: 0,  // Date.now() when recording started (wall clock)
+
   /** @type {{ shot, ai_top, ai_subtype, user_top, user_subtype,
-   *            video_clip_ts, timestamp, host_ts, hostEventTs, comment }[]} */
+   *            device_event_ts, host_event_ts_s, video_clip_ts,
+   *            timestamp, host_ts, comment, source, event_type }[]} */
   sessionEvents:  [],
   reviewIndex:    0,
 

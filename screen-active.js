@@ -33,6 +33,11 @@ export function startPracticeSession() {
   S.sessionEvents    = [];
   S.sensorWindow     = [];
   S.allSensorData    = [];
+  S.allRawPackets    = [];
+  S.battStartMv      = null;
+  S.battEndMv        = null;
+  S.totalLostPackets = 0;
+  S.recordingStartGlobalMs = 0;
   S.allVideoChunks   = [];
   S.videoSessionBlob = null;
   if (S.videoSessionUrl) { URL.revokeObjectURL(S.videoSessionUrl); S.videoSessionUrl = null; }
@@ -98,6 +103,11 @@ export function restartPracticeSession() {
   S.sessionEvents    = [];
   S.sensorWindow     = [];
   S.allSensorData    = [];
+  S.allRawPackets    = [];
+  S.battStartMv      = null;
+  S.battEndMv        = null;
+  S.totalLostPackets = 0;
+  S.recordingStartGlobalMs = 0;
   S.allVideoChunks   = [];
   S.videoSessionBlob = null;
   if (S.videoSessionUrl) { URL.revokeObjectURL(S.videoSessionUrl); S.videoSessionUrl = null; }
@@ -149,7 +159,8 @@ function startVideoRecording() {
   ];
   S.videoMimeType  = mimeOptions.find(m => MediaRecorder.isTypeSupported(m)) ?? '';
   S.allVideoChunks = [];
-  S.recordingStartMs = performance.now();
+  S.recordingStartMs     = performance.now();
+  S.recordingStartGlobalMs = Date.now();   // wall-clock reference for Firestore
 
   try {
     S.mediaRecorder = new MediaRecorder(S.mediaStream, {
@@ -181,26 +192,50 @@ export function stopCamera() {
 
 // ── BLE packet handler ────────────────────────────────────────────────────────
 function onBlePacket(dataView) {
+  const hostMs = performance.now();
+
+  // ── Task 4: accumulate raw packets for .bin upload ───────────────────────────
+  if (S.activeScreen === 'practice-active') {
+    const buffer = dataView.buffer.slice(dataView.byteOffset,
+                                         dataView.byteOffset + dataView.byteLength);
+    S.allRawPackets.push({ hostMs, buffer });
+  }
+
   const { batch, lostPackets, deviceInfo } = parser.parse(dataView);
-  if (lostPackets > 0) console.warn(`Packet loss: ${lostPackets}`);
+
+  // ── Packet loss tracking ────────────────────────────────────────────────────
+  if (lostPackets > 0) {
+    S.totalLostPackets += lostPackets;
+    console.warn(`Packet loss: ${lostPackets} (total: ${S.totalLostPackets})`);
+  }
 
   if (deviceInfo) {
-    S.deviceHwVer = `v${deviceInfo.hwVersion}`;
-    S.deviceFwVer = `v${deviceInfo.fwVersion}`;
+    // ── Battery tracking ─────────────────────────────────────────────────────
+    if (deviceInfo.battMv > 0) {
+      if (!S.battStartMv) S.battStartMv = deviceInfo.battMv;
+      S.battEndMv   = deviceInfo.battMv;
+      S.lastBattMv  = deviceInfo.battMv;
+    }
+    if (deviceInfo.tempC != null) S.lastTempC = deviceInfo.tempC;
+    // hw/fw version bytes in the packet are now RSVD zeros; use DIS values from window.deviceMeta
+    S.deviceHwVer = window.deviceMeta?.hwRevision ?? '–';
+    S.deviceFwVer = window.deviceMeta?.fwRevision ?? '–';
     updateDeviceInfoBar(deviceInfo);
   }
 
-  if (!batch || S.activeScreen !== 'practice-active') return;
+  if (!batch) return;
 
-  const hostNow            = performance.now();
+  // Always maintain sensorWindow — needed for Device Info baseline even when not in practice
+  const hostNow = hostMs;
   batch.forEach(s => { s.host_ts = hostNow; });
-  const latestDeviceTs_ms  = batch[batch.length - 1].mpu_ts;
-
-  // Rolling sensor window
   S.sensorWindow.push(...batch);
   if (S.sensorWindow.length > SENSOR_WINDOW_SLOTS) {
     S.sensorWindow.splice(0, S.sensorWindow.length - SENSOR_WINDOW_SLOTS);
   }
+
+  if (S.activeScreen !== 'practice-active') return;
+
+  const latestDeviceTs_ms  = batch[batch.length - 1].mpu_ts;
   S.allSensorData.push(...batch);
 
   const cal     = classifier.calibrator;
@@ -235,18 +270,26 @@ function onShotDetected(shot, hostNow = performance.now(), latestDeviceTs_ms = n
     ? Math.max(0, latestDeviceTs_ms - eventDeviceTs_ms) : 0;
   const hostEventTs   = (hostNow - S.recordingStartMs) - deviceLag_ms;
   const video_clip_ts = hostEventTs / 1000.0;
+  // host_event_ts_s: absolute performance.now()-based host time of event, in seconds
+  const host_event_ts_s = (hostNow - deviceLag_ms) / 1000.0;
+  // device_event_ts: device-side sensor timestamp of the event, in seconds
+  const device_event_ts = shot.basket_time ?? shot.impact_time ?? 0;
+  const event_type = aiTop === 'Make' ? 'basket' : 'impact';
 
   S.sessionEvents.push({
     shot,
-    ai_top:       aiTop,
-    ai_subtype:   aiSubtype,
-    user_top:     aiTop,
-    user_subtype: aiSubtype,
+    ai_top:         aiTop,
+    ai_subtype:     aiSubtype,
+    user_top:       aiTop,
+    user_subtype:   aiSubtype,
+    device_event_ts,
+    host_event_ts_s,
     video_clip_ts,
-    timestamp:    Date.now(),
-    host_ts:      hostNow,
+    event_type,
+    timestamp:      Date.now(),
+    host_ts:        hostNow,
     hostEventTs,
-    comment:      '',    // Feature 16: optional user comment
+    comment:        '',
   });
 
   const scoreText = `${S.sessionMakes} out of ${S.sessionTotal}`;
@@ -279,11 +322,17 @@ function onBleStatus(state, detail) {
   if (typeof window._updatePracticeReadyGate === 'function') {
     window._updatePracticeReadyGate();
   }
+  if (typeof window._updateOtaBleStatus === 'function') {
+    window._updateOtaBleStatus();
+  }
 }
 
 function updateDeviceInfoBar(info) {
-  setEl('di-hw',   `v${info.hwVersion}`);
-  setEl('di-fw',   `v${info.fwVersion}`);
-  setEl('di-batt', info.battMv ? `${(info.battMv / 1000).toFixed(2)} V` : '–');
-  setEl('di-temp', `${info.tempC}°C`);
-}
+  // hw/fw revision is now served via BLE DIS (window.deviceMeta); packet bytes 4-5 are RSVD zeros
+  const hw   = window.deviceMeta?.hwRevision  ?? '–';
+  const fw   = window.deviceMeta?.fwRevision  ?? '–';
+  setEl('di-hw',   hw);
+  setEl('di-fw',   fw);
+  setEl('di-batt', info.battMv ? `${(info.battMv / 1000).toFixed(2)} V` : '–');
+  setEl('di-temp', `${info.tempC}°C`);  // Refresh Device Info page live readings if it is currently open
+  if (typeof window._updateOtaReadings === 'function') window._updateOtaReadings();}

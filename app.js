@@ -25,7 +25,7 @@ import { wireReviewScreen }                     from './screen-review.js';
 import { wireHistoryScreen, loadHistory }       from './screen-history.js';
 import { wireOtaScreen, loadOtaScreen }         from './screen-ota.js';
 import { showScreen, showToast }                from './utils.js';
-import { S }                                    from './state.js';
+import { S, APP_REVISION }                      from './state.js';
 import { signOut }                              from './auth.js';
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -54,6 +54,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (S.isBleConnected) ble.disconnect();
     await signOut();
   });
+
+  // Stamp app version
+  const verEl = document.getElementById('app-version');
+  if (verEl) verEl.textContent = APP_REVISION;
 
   // Start auth listener — handles showScreen('dashboard') / showScreen('auth')
   startAuthListener();

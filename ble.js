@@ -19,6 +19,44 @@ const DEVICE_NAME  = 'ESP32-Basketball';
 const SERVICE_UUID = 'e3a00001-1d1e-4c0c-b23a-9d9a4c5f7ad1';
 const CHAR_UUID    = 'e3a00002-1d1e-4c0c-b23a-9d9a4c5f7ad1';
 
+// ── Device Information Service reader ─────────────────────────────────────────
+/**
+ * Read all Device Information Service (UUID 0x180A) characteristics from the
+ * connected GATT server.  Returns an object stored as window.deviceMeta so
+ * every screen can access it without re-reading BLE.
+ *
+ * @param {BluetoothRemoteGATTServer} server
+ * @returns {Promise<{manufacturer, model, hwRevision, fwRevision, systemId}|null>}
+ */
+async function readDeviceMetadata(server) {
+  // Mobile Web Bluetooth (Chrome Android, Safari iOS) allows only ONE ATT
+  // operation in-flight at a time.  Promise.all() causes requests 2-5 to
+  // fail immediately with "GATT operation already in progress".  Read each
+  // characteristic sequentially to work on all platforms.
+  const read = async (dis, uuid) => {
+    try {
+      const chr = await dis.getCharacteristic(uuid);
+      const val = await chr.readValue();
+      return new TextDecoder().decode(val);
+    } catch (_) { return ''; }
+  };
+
+  try {
+    const dis = await server.getPrimaryService('device_information');
+    const mfr   = await read(dis, 0x2A29);
+    const model  = await read(dis, 0x2A24);
+    const hwRev  = await read(dis, 0x2A27);
+    const fwRev  = await read(dis, 0x2A26);
+    const sysId  = await read(dis, 0x2A23);
+    const meta = { manufacturer: mfr, model, hwRevision: hwRev, fwRevision: fwRev, systemId: sysId };
+    console.log('[BLE] DIS device info:', meta);
+    return meta;
+  } catch (e) {
+    console.warn('[BLE] DIS read failed:', e.message);
+    return null;
+  }
+}
+
 export class BLEReceiver {
   /**
    * @param {(data: DataView) => void} onPacket  raw BLE notification payload
@@ -77,7 +115,7 @@ export class BLEReceiver {
     try {
       this._device = await navigator.bluetooth.requestDevice({
         filters:          [{ name: DEVICE_NAME }],
-        optionalServices: [SERVICE_UUID],
+        optionalServices: [SERVICE_UUID, 'device_information'],
       });
     } catch (err) {
       this._onStatus('cancelled', err.message);
@@ -117,6 +155,12 @@ export class BLEReceiver {
   async _subscribeAndNotify() {
     try {
       this._server   = await this._device.gatt.connect();
+
+      // ── Read Device Information Service (DIS 0x180A) ────────────────────
+      // Stores Manufacturer, Model, HW/FW Revision and MAC into window.deviceMeta
+      // so the setup screen and active bar can display them.
+      window.deviceMeta = await readDeviceMetadata(this._server);
+
       const service  = await this._server.getPrimaryService(SERVICE_UUID);
       this._char     = await service.getCharacteristic(CHAR_UUID);
       this._char.addEventListener('characteristicvaluechanged', (evt) => {

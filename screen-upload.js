@@ -1,11 +1,12 @@
 'use strict';
 
 import { saveShot, saveSession,
-         uploadSessionCsv, uploadSessionJson,
-         uploadSessionVideo, uploadPracticeSummary } from './db.js';
+         uploadSensorBin, uploadSessionJson,
+         uploadSessionVideo }                        from './db.js';
 import { loadSessionVideo, deleteSessionVideo }      from './video-store.js';
-import { S }                                         from './state.js';
-import { showScreen, setEl }                         from './utils.js';
+import { S, APP_REVISION }                          from './state.js';
+import { showScreen, setEl }                        from './utils.js';
+import { Timestamp } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js';
 
 // ── Upload orchestrator ───────────────────────────────────────────────────────
 export async function startUpload() {
@@ -13,9 +14,9 @@ export async function startUpload() {
   const uid = S.user?.uid;
   if (!uid) { showScreen('dashboard'); return; }
 
-  // Steps: 1 CSV + 1 JSON + 1 Summary + N shots + optional 1 session video
+  // Steps: 1 sensor.bin + 1 labels JSON + N shots + optional 1 session video
   const videoSteps = S.uploadVideoEnabled ? 1 : 0;
-  const totalSteps = 3 + S.sessionEvents.length + videoSteps;
+  const totalSteps = 2 + S.sessionEvents.length + videoSteps;
   let   doneSteps  = 0;
   const shotIds    = [];
 
@@ -35,11 +36,16 @@ export async function startUpload() {
   const aiTotal   = S.sessionEvents.filter(e => e.ai_top  !== 'Not-a-shot').length;
   const durSec    = Math.round(((S.sessionEnd ?? performance.now()) - S.sessionStart) / 1000);
 
-  // ── 1. Upload session CSV ─────────────────────────────────────────────────
+  // ── 1. Upload raw sensor binary ──────────────────────────────────────────
+  const lossPct = S.totalLostPackets > 0
+    ? parseFloat((S.totalLostPackets / (S.allRawPackets.length + S.totalLostPackets) * 100).toFixed(2))
+    : 0;
+  let sensorDataUrl = null;
   try {
-    setStatus('Uploading session CSV…');
-    await uploadSessionCsv(uid, S.sessionId, generateSessionCsv());
-  } catch (e) { console.warn('CSV upload failed:', e); }
+    setStatus('Uploading sensor data…');
+    const binBlob = generateSensorBin();
+    sensorDataUrl = await uploadSensorBin(uid, S.sessionId, binBlob);
+  } catch (e) { console.warn('Sensor bin upload failed:', e); }
   doneSteps++; updateBar();
 
   // ── 2. Upload session labels JSON ─────────────────────────────────────────
@@ -49,49 +55,36 @@ export async function startUpload() {
   } catch (e) { console.warn('Labels JSON upload failed:', e); }
   doneSteps++; updateBar();
 
-  // ── 3. Upload practice summary JSON ──────────────────────────────────────
-  try {
-    setStatus('Uploading practice summary…');
-    const summary = {
-      session_id:    S.sessionId,
-      duration_sec:  durSec,
-      user_makes:    userMakes,
-      user_total:    userTotal,
-      user_accuracy: userTotal > 0 ? Math.round(userMakes / userTotal * 100) : 0,
-      ai_makes:      aiMakes,
-      ai_total:      aiTotal,
-      ai_accuracy:   aiTotal  > 0 ? Math.round(aiMakes  / aiTotal  * 100) : 0,
-    };
-    const summaryBlob = new Blob([JSON.stringify(summary, null, 2)], { type: 'application/json' });
-    await uploadPracticeSummary(uid, S.sessionId, summaryBlob);
-  } catch (e) { console.warn('Practice summary upload failed:', e); }
-  doneSteps++; updateBar();
-
-  // ── 4. Save shot documents ────────────────────────────────────────────────
+  // ── 3. Save shot documents ────────────────────────────────────────────────
   for (let i = 0; i < S.sessionEvents.length; i++) {
     const ev = S.sessionEvents[i];
+    const source = (ev.user_top === ev.ai_top && ev.user_subtype === ev.ai_subtype)
+      ? 'auto' : 'manual';
     try {
       setStatus(`Saving shot ${i + 1} / ${S.sessionEvents.length}…`);
       const id = await saveShot({
-        userId:        uid,
-        sessionId:     S.sessionId,
-        timestamp:     ev.timestamp,
-        ai_prediction: ev.ai_top,
-        ai_subtype:    ev.ai_subtype,
-        basket_type:   ev.shot.basket_type ?? null,
-        user_label:    ev.user_top + (ev.user_subtype ? '/' + ev.user_subtype : ''),
-        user_top:      ev.user_top,
-        user_subtype:  ev.user_subtype,
-        confidence:    ev.shot.confidence ?? 0,
-        host_event_ts: ev.hostEventTs,
-        video_clip_ts: ev.video_clip_ts,
+        userId:          uid,
+        sessionId:       S.sessionId,
+        createdAt:       Timestamp.now(),
+        ai_top:          ev.ai_top,
+        ai_subtype:      ev.ai_subtype,
+        confidence:      ev.shot.confidence ?? 0,
+        user_top:        ev.user_top,
+        user_subtype:    ev.user_subtype,
+        comment:         ev.comment ?? '',
+        source,
+        event_type:      ev.event_type,
+        device_event_ts: ev.device_event_ts,
+        host_event_ts:   ev.host_event_ts_s,
+        video_clip_ts:   ev.video_clip_ts ?? null,
+        video_clip_url:  null,
       });
       shotIds.push(id);
     } catch (e) { console.warn('Shot save failed:', e); }
     doneSteps++; updateBar();
   }
 
-  // ── 5. Upload session video (if enabled) ──────────────────────────────────
+  // ── 4. Upload session video (if enabled) ──────────────────────────────────
   let sessionVideoUrl = null;
   if (S.uploadVideoEnabled) {
     let blob = S.videoSessionBlob;
@@ -111,16 +104,47 @@ export async function startUpload() {
     doneSteps++; updateBar();
   }
 
-  // ── 6. Save session summary to Firestore ──────────────────────────────────
+  // ── 5. Save session document to Firestore ──────────────────────────────────
   try {
     await saveSession(uid, S.sessionId, {
-      makes: userMakes, total: userTotal,
-      ai_makes: aiMakes, ai_total: aiTotal,
-      durationSec: durSec, shotIds, video_url: sessionVideoUrl,
+      userId:    uid,
+      sessionId: S.sessionId,
+      Device_Meta: {
+        Manufacturer_Name: window.deviceMeta?.manufacturer ?? '',
+        Model_Number:      window.deviceMeta?.model        ?? '',
+        Hardware_Revision: window.deviceMeta?.hwRevision   ?? '',
+        Firmware_Revision: window.deviceMeta?.fwRevision   ?? '',
+        'System_ID (MAC)': window.deviceMeta?.systemId     ?? '',
+        Battery_Start_mV:  S.battStartMv ?? 0,
+        Battery_End_mV:    S.battEndMv   ?? 0,
+      },
+      Client_Meta: {
+        App_Revision:        APP_REVISION,
+        User_Agent:          navigator.userAgent,
+        BLE_Packet_Loss_Pct: lossPct,
+      },
+      Practice_Meta: {
+        ai_accuracy:   aiTotal  > 0 ? parseFloat((aiMakes  / aiTotal  * 100).toFixed(1)) : 0,
+        ai_makes:      aiMakes,
+        ai_total:      aiTotal,
+        user_accuracy: userTotal > 0 ? parseFloat((userMakes / userTotal * 100).toFixed(1)) : 0,
+        user_makes:    userMakes,
+        user_total:    userTotal,
+        createdAt:     Timestamp.now(),
+        durationSec:   durSec,
+      },
+      createdAt:                 Timestamp.now(),
+      sensor_data_url:           sensorDataUrl,
+      recording_start_global_ms: S.recordingStartGlobalMs,
+      recording_start_s:         S.recordingStartMs / 1000,
+      video_url:                 sessionVideoUrl,
+      shotIds,
     });
   } catch (e) { console.warn('Session save failed:', e); }
 
-  S.allSensorData = [];   // free memory
+  // Free memory
+  S.allSensorData = [];
+  S.allRawPackets = [];
 
   setStatus('✅ Upload complete!');
   if (progressEl) progressEl.style.width = '100%';
@@ -134,24 +158,18 @@ export async function startUpload() {
   doneBtn?.addEventListener('click', () => showScreen('dashboard'), { once: true });
 }
 
-// ── CSV export ────────────────────────────────────────────────────────────────
-function generateSessionCsv() {
-  const header = [
-    'Host_Timestamp (ms)',
-    'MPU_Timestamp (ms)', 'AcX (g)', 'AcY (g)', 'AcZ (g)',
-    'GyX (dps)', 'GyY (dps)', 'GyZ (dps)',
-    'TOF_Timestamp (ms)', 'Range (mm)', 'Signal_Rate',
-  ].join(',');
-
-  const rows = S.allSensorData.map(s => [
-    (s.host_ts  ?? 0).toFixed(3),
-    s.mpu_ts ?? 0,
-    (s.accel[0] ?? 0).toFixed(6), (s.accel[1] ?? 0).toFixed(6), (s.accel[2] ?? 0).toFixed(6),
-    (s.gyro[0]  ?? 0).toFixed(4), (s.gyro[1]  ?? 0).toFixed(4), (s.gyro[2]  ?? 0).toFixed(4),
-    s.tof_ts ?? 0, s.distance ?? 0, s.signal_rate ?? 0,
-  ].join(','));
-
-  return new Blob([[header, ...rows].join('\n')], { type: 'text/csv' });
+// ── Binary sensor export ─────────────────────────────────────────────────────
+function generateSensorBin() {
+  const RECORD_SIZE = 8 + 336; // float64 hostMs + 336-byte raw BLE packet
+  const buf = new ArrayBuffer(S.allRawPackets.length * RECORD_SIZE);
+  const dv  = new DataView(buf);
+  const u8  = new Uint8Array(buf);
+  S.allRawPackets.forEach(({ hostMs, buffer }, i) => {
+    const offset = i * RECORD_SIZE;
+    dv.setFloat64(offset, hostMs, true); // little-endian float64
+    u8.set(new Uint8Array(buffer), offset + 8);
+  });
+  return new Blob([buf], { type: 'application/octet-stream' });
 }
 
 // ── Session labels JSON export ────────────────────────────────────────────────
@@ -167,10 +185,9 @@ function generateSessionJson() {
       user_subtype:  ev.user_subtype,
       comment:       ev.comment ?? '',          // Feature 16
       source,
-      row_idx:       idx,
-      event_ts_s:    ev.shot.basket_time ?? ev.shot.impact_time ?? 0,
-      event_type:    ev.ai_top === 'Make' ? 'basket' : 'impact',
-      host_ts_udp:   (ev.host_ts ?? 0) / 1000.0,
+      event_type:      ev.event_type,
+      device_event_ts: ev.device_event_ts,
+      host_event_ts:   ev.host_event_ts_s,
       video_clip_ts: ev.video_clip_ts ?? null,
     };
   });
