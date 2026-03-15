@@ -35,7 +35,8 @@ const CMD_END           = 0x02;
 
 const CHUNK_SIZE        = 496;  // MTU(512) - 3 ATT header - 13 padding, same as Python script
 // I will copy this to a public repo at shotcounter/. I will change the URL manually to reflect that. Don't change it back
-const FIRMWARE_URL      = 'https://raw.githubusercontent.com/jrklab/shotcounter_beta/main/fw/firmware.bin';
+const ESP32_S3_FW_URL   = 'https://raw.githubusercontent.com/jrklab/shotcounter_beta/main/fw/esp32_s3_firmware.bin';
+const ESP32_C3_FW_URL   = 'https://raw.githubusercontent.com/jrklab/shotcounter_beta/main/fw/esp32_c3_firmware.bin';
 const VERSION_URL       = 'https://raw.githubusercontent.com/jrklab/shotcounter_beta/main/fw/version.txt';
 
 // ── Sensor data service (also needed in optional services list for OTA flow) ──
@@ -60,11 +61,25 @@ export class OtaUpdater {
   // ── Public API ─────────────────────────────────────────────────────────────
 
   /**
-   * Query GitHub Releases API for the latest firmware asset.
-   * @returns {{ version: string, size: number, tagName: string, downloadUrl: string }}
+   * Query the firmware server for the latest version and firmware size.
+   * @param {string} modelNumber  Model string from DIS: "ESP32-S3" or "ESP32-C3".
+   *   Pass window.deviceMeta?.model after a BLE connection so the right binary
+   *   is selected.  Throws if the model is unknown or the URL is unreachable.
+   * @returns {{ version: string, size: number, downloadUrl: string, model: string }}
    */
-  async fetchLatestRelease() {
-    this._onStatus('Checking for latest firmware…');
+  async fetchLatestRelease(modelNumber) {
+    // Select the correct firmware binary based on the model number read from DIS.
+    let firmwareUrl;
+    if (modelNumber === 'ESP32-S3') {
+      firmwareUrl = ESP32_S3_FW_URL;
+    } else if (modelNumber === 'ESP32-C3') {
+      firmwareUrl = ESP32_C3_FW_URL;
+    } else {
+      throw new Error(
+        `Unknown model "${modelNumber || '(none)'}" — connect to the device via BLE first so the model number can be read.`);
+    }
+
+    this._onStatus(`Checking firmware for ${modelNumber}…`);
 
     // Read version string from fw/version.txt in the repo
     let version = 'unknown';
@@ -73,22 +88,20 @@ export class OtaUpdater {
       if (vResp.ok) version = (await vResp.text()).trim();
     } catch (_) { /* version stays 'unknown' */ }
 
-    // HEAD request to determine file size without downloading the binary
-    // NOTE: This will return 404 if shotcounter_beta is a private repo — raw.githubusercontent.com
-    // does not serve private files to unauthenticated browser requests. Make the repo public or
-    // move fw/ files to a public repo/CDN.
-    const headResp = await fetch(FIRMWARE_URL, { method: 'HEAD' });
+    // HEAD request to determine file size without downloading the binary.
+    // (raw.githubusercontent.com requires the repo to be public for unauthenticated access.)
+    const headResp = await fetch(firmwareUrl, { method: 'HEAD' });
     if (!headResp.ok) {
       if (headResp.status === 404) {
         throw new Error(
-          `fw/firmware.bin not found (HTTP 404). Ensure the file is committed to a public repo at ${FIRMWARE_URL}`);
+          `Firmware not found (HTTP 404) for ${modelNumber} at ${firmwareUrl}. Ensure the file is committed to the public repo.`);
       }
       throw new Error(`Firmware check failed (HTTP ${headResp.status})`);
     }
     const cl   = headResp.headers.get('content-length');
     const size = cl ? parseInt(cl, 10) : 0;
 
-    this._releaseInfo = { version, size, downloadUrl: FIRMWARE_URL };
+    this._releaseInfo = { version, size, downloadUrl: firmwareUrl, model: modelNumber };
     return { ...this._releaseInfo };
   }
 
