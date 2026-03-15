@@ -5,7 +5,7 @@ import { PacketParser }               from './parser.js';
 import { ShotClassifier }             from './classifier.js';
 import { storeSessionVideo }          from './video-store.js';
 import { S, VIDEO_TIMESLICE_MS, VIDEO_BITRATE,
-         SENSOR_WINDOW_SLOTS }        from './state.js';
+         SENSOR_WINDOW_SLOTS, IS_BETA }  from './state.js';
 import { showScreen, setEl, showToast, speak, initAudio } from './utils.js';
 import { showReviewScreen }           from './screen-review.js';
 
@@ -25,7 +25,8 @@ export function wirePracticeActive() {
 
 // ── Session lifecycle ─────────────────────────────────────────────────────────
 export function startPracticeSession() {
-  S.sessionId        = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 15);
+  const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 15);
+  S.sessionId        = IS_BETA ? `beta_${ts}` : ts;
   S.sessionStart     = performance.now();
   S.sessionEnd       = null;
   S.sessionMakes     = 0;
@@ -95,7 +96,8 @@ export function stopPracticeSession() {
 }
 
 export function restartPracticeSession() {
-  S.sessionId        = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 15);
+  const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 15);
+  S.sessionId        = IS_BETA ? `beta_${ts}` : ts;
   S.sessionStart     = performance.now();
   S.sessionEnd       = null;
   S.sessionMakes     = 0;
